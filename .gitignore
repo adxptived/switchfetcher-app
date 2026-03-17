@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.cargo-target/
+.cargo-target-*/
+.codex_tmp_*/
+.pnpm-store/
+.tmp/
+_tmp_*
+_icon_from_*
+_extracted_exe_icon.ico
+target-*/
+target-verify*/
+src-tauri/target-*/
+src-tauri/target*/
+src-tauri/_plan_target*/
+Снимок экрана *.png
+
+# AI tool config files
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
+.codex/
+
+# Editor directories and files
+.vscode
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
