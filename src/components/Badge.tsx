@@ -16,31 +16,44 @@ interface BadgeProps {
 }
 
 export function Badge({ variant, label, provider, status, title }: BadgeProps) {
-  const classes =
+  const tone =
     variant === "provider"
       ? provider === "codex"
-        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+        ? "var(--color-codex)"
         : provider === "claude"
-          ? "border-orange-200 bg-orange-50 text-orange-700"
-          : "border-blue-200 bg-blue-50 text-blue-700"
+          ? "var(--color-claude)"
+          : "var(--color-gemini)"
       : variant === "status"
         ? status === "healthy"
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          ? "var(--color-codex)"
           : status === "warning"
-            ? "border-amber-200 bg-amber-50 text-amber-700"
+            ? "#d97706"
             : status === "critical"
-              ? "border-red-200 bg-red-50 text-red-600"
-              : "border-slate-200 bg-slate-100 text-slate-600"
+              ? "#dc2626"
+              : "var(--color-text-secondary)"
         : variant === "repair"
-          ? "border-red-200 bg-red-50 text-red-600"
+          ? "#dc2626"
           : variant === "experimental"
-            ? "border-blue-200 bg-blue-50 text-blue-700"
-            : "border-[color:var(--color-border)] bg-[var(--color-bg-muted)] text-[var(--color-text-secondary)]";
+            ? "var(--color-gemini)"
+            : null;
+
+  const style = tone
+    ? {
+        borderColor: `color-mix(in srgb, ${tone} 25%, transparent)`,
+        background: `color-mix(in srgb, ${tone} 12%, transparent)`,
+        color: tone,
+      }
+    : {
+        borderColor: "var(--color-border)",
+        background: "var(--color-bg-muted)",
+        color: "var(--color-text-secondary)",
+      };
 
   return (
     <span
       title={title}
-      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium ${classes}`}
+      className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium"
+      style={style}
     >
       {label}
     </span>

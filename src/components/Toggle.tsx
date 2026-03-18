@@ -16,7 +16,8 @@ export function Toggle({ checked, onChange, disabled = false }: ToggleProps) {
         checked ? "bg-emerald-500" : ""
       }`}
       style={{
-        background: checked ? undefined : "var(--color-btn-secondary-bg)",
+        background: checked ? undefined : "var(--color-toggle-off-bg)",
+        border: checked ? "1px solid transparent" : "1px solid var(--color-toggle-off-border)",
       }}
     >
       <span

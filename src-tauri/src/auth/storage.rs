@@ -976,7 +976,7 @@ pub fn remove_account(account_id: &str) -> Result<()> {
             .map(|account| account.provider);
         persisted.accounts.retain(|account| account.id != account_id);
         if persisted.accounts.len() == initial_len {
-            anyhow::bail!("Account not found: {account_id}");
+            return Ok(());
         }
 
         if persisted.active_account_id.as_deref() == Some(account_id) {
@@ -1222,8 +1222,8 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
 mod tests {
     use super::{
         get_accounts_file, get_file_secret_store_path, load_accounts, load_accounts_report,
-        mark_account_switched, repair_account_secret, save_accounts, AccountsStore, Provider,
-        StoredAccount,
+        mark_account_switched, remove_account, repair_account_secret, save_accounts,
+        AccountsStore, Provider, StoredAccount,
     };
     use base64::Engine;
     use crate::types::AuthData;
@@ -1406,6 +1406,85 @@ mod tests {
 
         unsafe {
             std::env::remove_var("SWITCHFETCHER_HOME");
+            std::env::remove_var("SWITCHFETCHER_SECRET_BACKEND");
+        }
+        fs::remove_dir_all(temp_home).ok();
+    }
+
+    #[test]
+    fn remove_account_deletes_legacy_only_account() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_home = make_temp_home("remove-legacy-only");
+        let config_dir = temp_home.join(".switchfetcher");
+        let legacy_dir = temp_home.join(".codex-switcher");
+        unsafe {
+            std::env::set_var("SWITCHFETCHER_CONFIG_DIR", &config_dir);
+            std::env::set_var("SWITCHFETCHER_SECRET_BACKEND", "file");
+        }
+
+        let account = StoredAccount::new_session_cookie(
+            "Gemini Legacy".to_string(),
+            Provider::Gemini,
+            "__Secure-1PSID=legacy; __Secure-1PSIDTS=only".to_string(),
+        );
+
+        fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        let legacy_json = serde_json::json!({
+            "version": 1,
+            "accounts": [{
+                "id": account.id,
+                "name": account.name,
+                "provider": "gemini",
+                "tags": [],
+                "hidden": false,
+                "email": account.email,
+                "plan_type": account.plan_type,
+                "auth_mode": "session_cookie",
+                "auth_data": account.auth_data,
+                "created_at": account.created_at,
+                "last_used_at": account.last_used_at
+            }],
+            "active_account_id": account.id,
+            "history": []
+        });
+        fs::write(
+            legacy_dir.join("accounts.json"),
+            serde_json::to_string_pretty(&legacy_json).unwrap(),
+        )
+        .expect("legacy accounts file");
+
+        let loaded = load_accounts().expect("legacy-only account should load");
+        assert_eq!(loaded.accounts.len(), 1);
+        assert_eq!(loaded.accounts[0].id, account.id);
+
+        remove_account(&account.id).expect("delete should succeed for legacy-only account");
+
+        let loaded_after = load_accounts().expect("load after delete should succeed");
+        assert!(loaded_after.accounts.is_empty());
+        assert!(get_accounts_file().expect("current accounts file").exists());
+
+        unsafe {
+            std::env::remove_var("SWITCHFETCHER_CONFIG_DIR");
+            std::env::remove_var("SWITCHFETCHER_SECRET_BACKEND");
+        }
+        fs::remove_dir_all(temp_home).ok();
+    }
+
+    #[test]
+    fn remove_account_is_noop_when_account_is_already_missing() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_home = make_temp_home("remove-missing");
+        unsafe {
+            std::env::set_var("SWITCHFETCHER_CONFIG_DIR", temp_home.join(".switchfetcher"));
+            std::env::set_var("SWITCHFETCHER_SECRET_BACKEND", "file");
+        }
+
+        let result = remove_account("5585d3b0-ba41-4be3-9f21-7bd1d4404c1f");
+
+        assert!(result.is_ok(), "deleting a stale account id should not fail");
+
+        unsafe {
+            std::env::remove_var("SWITCHFETCHER_CONFIG_DIR");
             std::env::remove_var("SWITCHFETCHER_SECRET_BACKEND");
         }
         fs::remove_dir_all(temp_home).ok();

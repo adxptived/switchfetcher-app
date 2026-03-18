@@ -212,7 +212,7 @@ export function Header({
             <div className="relative" ref={actionsMenuRef}>
               <button
                 onClick={onToggleActionsMenu}
-                className="h-10 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
+                className="h-10 rounded-lg px-4 py-2 text-sm font-medium sf-btn-primary"
               >
                 Account ▾
               </button>

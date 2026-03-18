@@ -83,6 +83,66 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
     </script>
 </body>
 </html>"#;
+const FAILURE_HTML: &str = r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Login Failed - Switchfetcher</title>
+    <meta charset="utf-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1117;
+            display: flex; justify-content: center; align-items: center;
+            min-height: 100vh; color: #fff;
+        }
+        .card {
+            background: #1a1d27;
+            border: 1px solid #3a2230;
+            border-radius: 16px;
+            padding: 36px 40px;
+            max-width: 520px; width: 92%;
+            box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+        }
+        .brand {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 24px;
+            font-size: 12px; font-weight: 600; letter-spacing: 0.1em;
+            text-transform: uppercase; color: #6b7280;
+        }
+        .brand-dot { width: 8px; height: 8px; background: #ef4444; border-radius: 50%; }
+        h1 { font-size: 22px; font-weight: 700; color: #f9fafb; margin-bottom: 12px; }
+        p { font-size: 14px; color: #d1d5db; line-height: 1.55; margin-bottom: 14px; }
+        ul { margin: 0 0 14px 20px; color: #d1d5db; }
+        li { margin-bottom: 8px; line-height: 1.45; }
+        .details {
+            margin-top: 18px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: rgba(239,68,68,0.08);
+            border: 1px solid rgba(239,68,68,0.18);
+            font-size: 12px;
+            color: #fca5a5;
+            word-break: break-word;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="brand"><div class="brand-dot"></div>Switchfetcher</div>
+        <h1>Login Failed</h1>
+        <p>OpenAI returned a temporary authentication error while completing browser login.</p>
+        <ul>
+            <li>Try the login again in a few seconds.</li>
+            <li>Clear cookies for chatgpt.com and auth.openai.com if the error keeps repeating.</li>
+            <li>Disable VPN/proxy, or retry in an incognito window or another browser.</li>
+        </ul>
+        <p>You can close this tab and return to Switchfetcher to retry.</p>
+        <div class="details">__DETAILS__</div>
+    </div>
+</body>
+</html>"#;
 
 /// PKCE codes for OAuth
 #[derive(Debug, Clone)]
@@ -371,6 +431,37 @@ enum HandleResult {
     Error(anyhow::Error),
 }
 
+fn format_oauth_provider_error(error: &str, error_desc: &str) -> String {
+    let normalized_error = error.trim();
+    let normalized_desc = error_desc.trim();
+    if normalized_error.eq_ignore_ascii_case("unknown_error") {
+        return format!(
+            "OpenAI authentication failed temporarily (unknown_error). Please try again. If it keeps happening, clear cookies for chatgpt.com/auth.openai.com, disable VPN/proxy, or retry in an incognito window. Provider details: {normalized_desc}"
+        );
+    }
+
+    format!("OAuth error: {normalized_error} - {normalized_desc}")
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn oauth_failure_response(details: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let html = FAILURE_HTML.replace("__DETAILS__", &escape_html(details));
+    if let Ok(content_type) = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+    {
+        Response::from_string(html).with_header(content_type)
+    } else {
+        Response::from_string(html)
+    }
+}
+
 async fn handle_oauth_request(
     request: Request,
     pkce: &PkceCodes,
@@ -406,11 +497,9 @@ async fn handle_oauth_request(
                 .map(|s| s.as_str())
                 .unwrap_or("Unknown error");
             println!("[OAuth] Error from provider: {error} - {error_desc}");
-            let _ = request.respond(
-                Response::from_string(format!("OAuth Error: {error} - {error_desc}"))
-                    .with_status_code(400),
-            );
-            return HandleResult::Error(anyhow::anyhow!("OAuth error: {error} - {error_desc}"));
+            let message = format_oauth_provider_error(error, error_desc);
+            let _ = request.respond(oauth_failure_response(&message).with_status_code(400));
+            return HandleResult::Error(anyhow::anyhow!(message));
         }
 
         // Verify state
@@ -497,13 +586,33 @@ pub async fn wait_for_oauth_login(
 
 #[cfg(test)]
 mod tests {
-    use super::build_redirect_uri;
+    use super::{build_redirect_uri, escape_html, format_oauth_provider_error};
 
     #[test]
     fn redirect_uri_uses_ipv4_loopback_host() {
         assert_eq!(
             build_redirect_uri(1455),
             "http://127.0.0.1:1455/auth/callback"
+        );
+    }
+
+    #[test]
+    fn formats_unknown_error_with_retry_guidance() {
+        let message = format_oauth_provider_error(
+            "unknown_error",
+            "Request ID abc-123. Try again later.",
+        );
+
+        assert!(message.contains("failed temporarily"));
+        assert!(message.contains("Please try again"));
+        assert!(message.contains("Request ID abc-123"));
+    }
+
+    #[test]
+    fn escapes_html_in_failure_details() {
+        assert_eq!(
+            escape_html(r#"<tag attr="value">test & more</tag>"#),
+            "&lt;tag attr=&quot;value&quot;&gt;test &amp; more&lt;/tag&gt;"
         );
     }
 }

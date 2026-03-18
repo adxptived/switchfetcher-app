@@ -20,6 +20,26 @@ interface AddAccountModalProps {
 
 type Tab = "oauth" | "import" | "claude" | "gemini_oauth" | "session";
 
+function formatOAuthErrorMessage(message: string): string {
+  const normalized = message.trim();
+
+  if (
+    normalized.includes("unknown_error") ||
+    normalized.includes("failed temporarily")
+  ) {
+    return [
+      "OpenAI login failed temporarily.",
+      "Try again in a few seconds.",
+      "If it keeps happening, clear cookies for chatgpt.com/auth.openai.com, disable VPN or proxy, or retry in an incognito window.",
+      normalized.includes("Provider details:")
+        ? normalized.slice(normalized.indexOf("Provider details:"))
+        : normalized,
+    ].join(" ");
+  }
+
+  return normalized;
+}
+
 const providerConfig: Record<
   Provider,
   { label: string; accent: string; helperText: string; browserUrl?: string }
@@ -149,7 +169,7 @@ export function AddAccountModal({
       await onCompleteOAuth();
       handleClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatOAuthErrorMessage(err instanceof Error ? err.message : String(err)));
       setLoading(false);
       setOauthPending(false);
     }
@@ -397,6 +417,10 @@ export function AddAccountModal({
                   </p>
                   <p className="mb-4 text-xs text-[var(--color-text-secondary)]">
                     Open the generated link in your browser to complete the Codex login.
+                  </p>
+                  <p className="mb-4 text-xs text-[var(--color-text-muted)]">
+                    If the browser shows OpenAI `unknown_error`, close that tab and generate a new
+                    login link here.
                   </p>
                   <div className="mb-2 flex items-center gap-2 rounded-lg p-2 sf-input">
                     <input
