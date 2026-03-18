@@ -9,10 +9,9 @@
 </p>
 
 <p align="center">
-  
   <a href="https://github.com/adxptived/switchfetcher-app/releases"><img alt="Version" src="https://img.shields.io/github/v/release/adxptived/switchfetcher-app"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2B-0078D6">
-</p>
+</p>>
 
 Switchfetcher keeps multiple local AI accounts in one desktop app, refreshes usage across providers, and lets you switch active credentials without digging through config files by hand.
 
