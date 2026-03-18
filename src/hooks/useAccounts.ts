@@ -47,6 +47,14 @@ import {
   warmupAllAccounts as warmupAllAccountsIpc,
 } from "../ipc";
 
+function formatHookError(err: unknown) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isMissingAccountError(err: unknown, accountId: string) {
+  return formatHookError(err).includes(`Account not found: ${accountId}`);
+}
+
 export function useAccounts() {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
@@ -198,7 +206,14 @@ export function useAccounts() {
     async (accountId: string) => {
       try {
         await deleteAccountIpc(accountId);
-        await loadAccounts();
+        setAccounts((prev) => prev.filter((account) => account.id !== accountId));
+        try {
+          await loadAccounts();
+        } catch (err) {
+          if (!isMissingAccountError(err, accountId)) {
+            throw err;
+          }
+        }
       } catch (err) {
         throw err;
       }
