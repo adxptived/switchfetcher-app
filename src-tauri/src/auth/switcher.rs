@@ -54,8 +54,23 @@ pub fn switch_to_account(account: &StoredAccount) -> Result<()> {
             };
             crate::api::claude::save_runtime_claude_credentials_to_path(&path, &credentials)
         }
-        (Provider::Gemini, AuthData::GeminiOAuth { .. }) => {
-            anyhow::bail!("Gemini OAuth switching is not validated yet and remains disabled")
+        (
+            Provider::Gemini,
+            AuthData::GeminiOAuth {
+                access_token,
+                refresh_token,
+                id_token,
+                expiry_date,
+            },
+        ) => {
+            let path = get_gemini_creds_file()?;
+            let credentials = crate::api::gemini::GeminiCredentials {
+                access_token: access_token.clone(),
+                refresh_token: refresh_token.clone(),
+                id_token: id_token.clone(),
+                expiry_date: *expiry_date,
+            };
+            write_json_file(&path, &credentials)
         }
         (Provider::Gemini, AuthData::SessionCookie { .. }) => {
             anyhow::bail!("Gemini session-cookie accounts are not switchable")
@@ -69,6 +84,7 @@ pub fn can_switch_account(account: &StoredAccount) -> bool {
         (&account.provider, &account.auth_data),
         (Provider::Codex, AuthData::ApiKey { .. } | AuthData::ChatGPT { .. })
             | (Provider::Claude, AuthData::ClaudeOAuth { .. })
+            | (Provider::Gemini, AuthData::GeminiOAuth { .. })
     )
 }
 
@@ -193,6 +209,11 @@ fn get_claude_credentials_file() -> Result<PathBuf> {
     Ok(home.join(".claude").join(".credentials.json"))
 }
 
+fn get_gemini_creds_file() -> Result<PathBuf> {
+    let home = get_user_home_dir()?;
+    Ok(home.join(".gemini").join("oauth_creds.json"))
+}
+
 fn get_user_home_dir() -> Result<PathBuf> {
     if let Ok(home) = std::env::var("SWITCHFETCHER_HOME") {
         return Ok(PathBuf::from(home));
@@ -280,6 +301,34 @@ mod tests {
             switch_to_account(&account).expect_err("Gemini session cookies are not switchable");
 
         assert!(error.to_string().contains("not switchable"));
+    }
+
+    #[test]
+    fn switch_to_account_writes_gemini_oauth_creds_file() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex should lock");
+        let temp_home = make_temp_home("gemini");
+        unsafe {
+            std::env::set_var("SWITCHFETCHER_HOME", &temp_home);
+            std::env::remove_var("CODEX_HOME");
+        }
+
+        let account = StoredAccount::new_gemini_oauth(
+            "Gemini".to_string(),
+            Some("user@gmail.com".to_string()),
+            "access".to_string(),
+            "refresh".to_string(),
+            "id_token".to_string(),
+            9_999_999_999_000,
+        );
+
+        switch_to_account(&account).expect("switch should write Gemini credentials");
+
+        let contents = fs::read_to_string(temp_home.join(".gemini").join("oauth_creds.json"))
+            .expect("Gemini credentials should be written");
+        assert!(contents.contains("\"access_token\": \"access\""));
+        assert!(contents.contains("\"refresh_token\": \"refresh\""));
+
+        fs::remove_dir_all(temp_home).ok();
     }
 
     #[test]

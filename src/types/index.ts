@@ -107,6 +107,20 @@ export interface CodexProcessInfo {
   pids: number[];
 }
 
+export interface ClaudeProcessInfo {
+  count: number;
+  background_count: number;
+  can_switch: boolean;
+  pids: number[];
+}
+
+export interface GeminiProcessInfo {
+  count: number;
+  background_count: number;
+  can_switch: boolean;
+  pids: number[];
+}
+
 export interface WarmupSummary {
   total_accounts: number;
   warmed_accounts: number;

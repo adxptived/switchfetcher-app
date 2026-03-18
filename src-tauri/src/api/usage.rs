@@ -119,7 +119,10 @@ async fn parse_usage_response(
 
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        println!("[Usage] Error response: {body}");
+        println!(
+            "[Usage] Error response received (status {status}, {} chars)",
+            body.chars().count()
+        );
         return Ok(UsageInfo::error(
             account_id.to_string(),
             format!("API error: {status}"),
@@ -131,8 +134,8 @@ async fn parse_usage_response(
         .await
         .context("Failed to read response body")?;
     println!(
-        "[Usage] Response body: {}",
-        &body_text[..body_text.len().min(200)]
+        "[Usage] Response body received ({} chars, preview redacted)",
+        body_text.chars().count()
     );
 
     let payload: RateLimitStatusPayload =
@@ -334,10 +337,13 @@ fn log_warmup_response(source: &str, body: &str, is_sse: bool) {
 }
 
 fn truncate_text(text: &str, max_len: usize) -> String {
-    if text.len() <= max_len {
-        return text.to_string();
+    let mut chars = text.chars();
+    let truncated: String = chars.by_ref().take(max_len).collect();
+    if chars.next().is_none() {
+        return truncated;
     }
-    let mut out = text[..max_len].to_string();
+
+    let mut out = truncated;
     out.push_str("...");
     out
 }
@@ -492,7 +498,7 @@ fn should_pause_between_usage_requests(
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_quota_status, should_pause_between_usage_requests};
+    use super::{compute_quota_status, should_pause_between_usage_requests, truncate_text};
     use crate::types::Provider;
 
     #[test]
@@ -520,5 +526,11 @@ mod tests {
             Provider::Gemini
         ));
         assert!(!should_pause_between_usage_requests(None, Provider::Claude));
+    }
+
+    #[test]
+    fn truncate_text_preserves_unicode_boundaries() {
+        assert_eq!(truncate_text("привет", 4), "прив...");
+        assert_eq!(truncate_text("hello🙂world", 6), "hello🙂...");
     }
 }

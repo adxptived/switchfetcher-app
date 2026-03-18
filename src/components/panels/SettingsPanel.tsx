@@ -1,3 +1,4 @@
+import { Toggle } from "../Toggle";
 import type { AppSettings, NotificationPermissionState } from "../../types";
 
 type UpdateStatus = "checking" | "up_to_date" | "update_available" | "error";
@@ -43,6 +44,8 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   if (!isOpen) return null;
 
+  const sectionTitleClass = "flex items-center gap-2 text-sm font-semibold";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center sf-overlay">
       <div className="mx-4 w-full max-w-2xl rounded-2xl sf-panel">
@@ -53,8 +56,22 @@ export function SettingsPanel({
         <div className="max-h-[70vh] space-y-5 overflow-y-auto p-5">
           {!settingsDraft ? <p className="text-sm" style={{ color: "var(--color-text-secondary)" }}>Loading settings...</p> : <>
             <div className="rounded-xl p-4 space-y-4 sf-panel">
-              <div><div className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>Background refresh</div><div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>One backend scheduler updates usage cards and tray state.</div></div>
-              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}><span>Enable background refresh</span><input type="checkbox" checked={settingsDraft.background_refresh_enabled} onChange={(event) => onFieldChange("background_refresh_enabled", event.target.checked)} /></label>
+              <div>
+                <div className={sectionTitleClass} style={{ color: "var(--color-text-primary)" }}>
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 4v6h6" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M20 20v-6h-6" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M20 9a8 8 0 00-13.66-4.66L4 6" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 15a8 8 0 0013.66 4.66L20 18" />
+                  </svg>
+                  Background refresh
+                </div>
+                <div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>One backend scheduler updates usage cards and tray state.</div>
+              </div>
+              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
+                <span>Enable background refresh</span>
+                <Toggle checked={settingsDraft.background_refresh_enabled} onChange={(checked) => onFieldChange("background_refresh_enabled", checked)} />
+              </label>
               <div className="space-y-2">
                 <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
                   <span>Refresh interval</span>
@@ -65,10 +82,27 @@ export function SettingsPanel({
               </div>
             </div>
             <div className="rounded-xl p-4 space-y-4 sf-panel">
-              <div><div className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>Notifications</div><div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>Desktop notifications for reset recovery, threshold alerts and quick smoke-testing.</div></div>
-              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}><span>Enable notifications</span><input type="checkbox" checked={settingsDraft.notifications_enabled} onChange={(event) => onFieldChange("notifications_enabled", event.target.checked)} /></label>
-              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}><span>Claude reset notifications</span><input type="checkbox" checked={settingsDraft.claude_reset_notifications_enabled} onChange={(event) => onFieldChange("claude_reset_notifications_enabled", event.target.checked)} /></label>
-              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}><span>24-hour clock</span><input type="checkbox" checked={settingsDraft.use_24h_time} onChange={(event) => onFieldChange("use_24h_time", event.target.checked)} /></label>
+              <div>
+                <div className={sectionTitleClass} style={{ color: "var(--color-text-primary)" }}>
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  Notifications
+                </div>
+                <div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>Desktop notifications for reset recovery, threshold alerts and quick smoke-testing.</div>
+              </div>
+              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
+                <span>Enable notifications</span>
+                <Toggle checked={settingsDraft.notifications_enabled} onChange={(checked) => onFieldChange("notifications_enabled", checked)} />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
+                <span>Claude reset notifications</span>
+                <Toggle checked={settingsDraft.claude_reset_notifications_enabled} onChange={(checked) => onFieldChange("claude_reset_notifications_enabled", checked)} />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
+                <span>24-hour clock</span>
+                <Toggle checked={settingsDraft.use_24h_time} onChange={(checked) => onFieldChange("use_24h_time", checked)} />
+              </label>
               <div className="space-y-2 text-sm" style={{ color: "var(--color-text-secondary)" }}>
                 <div className="flex items-center justify-between gap-3">
                   <span>Usage alert threshold</span>
@@ -76,7 +110,7 @@ export function SettingsPanel({
                 </div>
                 <input type="range" min="50" max="95" step="5" value={settingsDraft.usage_alert_threshold ?? 80} onChange={(event) => onFieldChange("usage_alert_threshold", Number(event.target.value) as AppSettings["usage_alert_threshold"])} disabled={settingsDraft.usage_alert_threshold == null} className="w-full" />
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={settingsDraft.usage_alert_threshold != null} onChange={(event) => onFieldChange("usage_alert_threshold", event.target.checked ? 80 : null)} />
+                  <Toggle checked={settingsDraft.usage_alert_threshold != null} onChange={(checked) => onFieldChange("usage_alert_threshold", checked ? 80 : null)} />
                   Enable usage threshold alerts
                 </label>
               </div>
@@ -85,7 +119,14 @@ export function SettingsPanel({
             </div>
             <div className="rounded-xl p-4 space-y-4 sf-panel">
               <div>
-                <div className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>About / Updates</div>
+                <div className={sectionTitleClass} style={{ color: "var(--color-text-primary)" }}>
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="8.5" strokeWidth={1.8} />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 10v5" />
+                    <circle cx="12" cy="7.5" r="1" fill="currentColor" stroke="none" />
+                  </svg>
+                  About / Updates
+                </div>
                 <div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>Open the project repository and compare your build against the latest GitHub release.</div>
               </div>
               <div className="rounded-lg border p-3 text-sm" style={{ background: "var(--color-bg-muted)", borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}>

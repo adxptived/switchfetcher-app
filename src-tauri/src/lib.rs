@@ -12,16 +12,17 @@ pub mod watcher;
 use tauri::Manager;
 
 use commands::{
-    add_account_from_file, add_session_cookie_account, cancel_login, check_codex_processes,
-    complete_login, delete_account, delete_accounts_bulk, export_accounts_full_encrypted_file,
-    export_accounts_slim_text, export_selected_accounts_full_encrypted_file,
-    export_selected_accounts_slim_text, get_active_account_info, get_best_account_recommendation,
-    get_diagnostics, get_provider_capabilities, get_usage, import_claude_credentials,
+    add_account_from_file, add_session_cookie_account, cancel_login, check_claude_processes,
+    check_codex_processes, check_gemini_processes, complete_login, delete_account,
+    delete_accounts_bulk, export_accounts_full_encrypted_file, export_accounts_slim_text,
+    export_selected_accounts_full_encrypted_file, export_selected_accounts_slim_text,
+    get_active_account_info, get_best_account_recommendation, get_diagnostics,
+    get_provider_capabilities, get_usage, import_claude_credentials,
     import_claude_credentials_from_path, import_accounts_full_encrypted_file,
     import_accounts_slim_text, import_gemini_credentials, import_gemini_credentials_from_path,
-    list_account_history, list_accounts, refresh_all_accounts_usage, refresh_selected_accounts_usage,
-    rename_account, repair_account_secret, set_account_tags, set_provider_hidden, start_login, switch_account,
-    warmup_account, warmup_all_accounts,
+    list_account_history, list_accounts, refresh_all_accounts_usage,
+    refresh_selected_accounts_usage, rename_account, repair_account_secret, set_account_tags,
+    set_provider_hidden, start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 use settings::{
     get_app_settings, get_notification_permission_state, request_notification_permission,
@@ -105,6 +106,8 @@ pub fn run() {
             send_test_notification,
             // Process detection
             check_codex_processes,
+            check_claude_processes,
+            check_gemini_processes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

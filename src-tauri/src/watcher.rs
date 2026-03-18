@@ -170,12 +170,9 @@ pub fn should_warn_tray(store: &AccountsStore, usage_list: &[UsageInfo]) -> bool
 
     usage_list.iter().any(|usage| {
         usage.error.is_some()
-            || usage.primary_resets_at.is_some_and(|resets_at| {
-                let reset_at = chrono::DateTime::from_timestamp(resets_at, 0)
-                    .unwrap_or_else(Utc::now)
-                    .with_timezone(&Utc);
-                reset_at >= now && (reset_at - now) <= Duration::minutes(10)
-            })
+            || usage.primary_resets_at.and_then(DateTime::<Utc>::from_timestamp).is_some_and(
+                |reset_at| reset_at >= now && (reset_at - now) <= Duration::minutes(10),
+            )
     })
 }
 
@@ -258,6 +255,15 @@ mod tests {
         let reset_at = (Utc::now() + chrono::Duration::minutes(90)).timestamp();
 
         assert!(!should_warn_tray(&store, &[usage(&account.id, Some(reset_at), None)]));
+    }
+
+    #[test]
+    fn ignores_invalid_reset_timestamps() {
+        let account = StoredAccount::new_api_key("A".to_string(), "sk-a".to_string());
+        let mut store = AccountsStore::default();
+        store.accounts.push(account.clone());
+
+        assert!(!should_warn_tray(&store, &[usage(&account.id, Some(i64::MAX), None)]));
     }
 
     #[test]

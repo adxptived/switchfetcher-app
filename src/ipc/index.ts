@@ -4,8 +4,10 @@ import type {
   AccountInfo,
   AppSettings,
   BestAccountRecommendation,
+  ClaudeProcessInfo,
   CodexProcessInfo,
   DiagnosticsSnapshot,
+  GeminiProcessInfo,
   ImportAccountsSummary,
   NotificationPermissionState,
   OAuthLoginInfo,
@@ -16,6 +18,8 @@ import type {
 } from "../types";
 
 export const checkCodexProcesses = () => invoke<CodexProcessInfo>("check_codex_processes");
+export const checkClaudeProcesses = () => invoke<ClaudeProcessInfo>("check_claude_processes");
+export const checkGeminiProcesses = () => invoke<GeminiProcessInfo>("check_gemini_processes");
 export const listAccounts = () => invoke<AccountInfo[]>("list_accounts");
 export const refreshAllAccountsUsage = () => invoke<UsageInfo[]>("refresh_all_accounts_usage");
 export const refreshSelectedAccountsUsage = (accountIds: string[]) =>

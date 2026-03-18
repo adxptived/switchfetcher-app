@@ -3,6 +3,7 @@ import type { AccountWithUsage } from "../types";
 import { UsageBar } from "./UsageBar";
 import { Badge } from "./Badge";
 import { formatPlanLabel } from "../utils/accounts";
+import { formatEnglishMonthDay } from "../utils/date";
 
 interface AccountCardProps {
   account: AccountWithUsage;
@@ -38,10 +39,7 @@ function BlurredText({ children, blur }: { children: React.ReactNode; blur: bool
 
 function formatResetDate(value: number | null | undefined) {
   if (!value) return "No reset window";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(value * 1000));
+  return formatEnglishMonthDay(value * 1000);
 }
 
 export function AccountCard({

@@ -21,6 +21,32 @@ pub struct CodexProcessInfo {
     pub pids: Vec<u32>,
 }
 
+/// Information about running Claude processes
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ClaudeProcessInfo {
+    /// Number of running claude processes
+    pub count: usize,
+    /// Number of background claude processes
+    pub background_count: usize,
+    /// Whether switching is allowed (no processes running)
+    pub can_switch: bool,
+    /// Process IDs of running claude processes
+    pub pids: Vec<u32>,
+}
+
+/// Information about running Gemini processes
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GeminiProcessInfo {
+    /// Number of running gemini processes
+    pub count: usize,
+    /// Number of background gemini processes
+    pub background_count: usize,
+    /// Whether switching is allowed (no processes running)
+    pub can_switch: bool,
+    /// Process IDs of running gemini processes
+    pub pids: Vec<u32>,
+}
+
 /// Check for running Codex processes
 #[tauri::command]
 pub async fn check_codex_processes() -> Result<CodexProcessInfo, String> {
@@ -30,6 +56,34 @@ pub async fn check_codex_processes() -> Result<CodexProcessInfo, String> {
     Ok(CodexProcessInfo {
         count,
         background_count: bg_count,
+        can_switch: count == 0,
+        pids,
+    })
+}
+
+/// Check for running Claude processes
+#[tauri::command]
+pub async fn check_claude_processes() -> Result<ClaudeProcessInfo, String> {
+    let pids = find_named_processes("claude").map_err(|e| e.to_string())?;
+    let count = pids.len();
+
+    Ok(ClaudeProcessInfo {
+        count,
+        background_count: 0,
+        can_switch: count == 0,
+        pids,
+    })
+}
+
+/// Check for running Gemini processes
+#[tauri::command]
+pub async fn check_gemini_processes() -> Result<GeminiProcessInfo, String> {
+    let pids = find_named_processes("gemini").map_err(|e| e.to_string())?;
+    let count = pids.len();
+
+    Ok(GeminiProcessInfo {
+        count,
+        background_count: 0,
         can_switch: count == 0,
         pids,
     })
@@ -173,4 +227,80 @@ fn is_ide_plugin_command(command: &str) -> bool {
     command.contains(".antigravity")
         || command.contains("openai.chatgpt")
         || command.contains(".vscode")
+}
+
+fn find_named_processes(process_name: &str) -> anyhow::Result<Vec<u32>> {
+    #[cfg(unix)]
+    {
+        return find_named_processes_unix(process_name);
+    }
+
+    #[cfg(windows)]
+    {
+        return find_named_processes_windows(process_name);
+    }
+
+    #[allow(unreachable_code)]
+    Ok(Vec::new())
+}
+
+#[cfg(unix)]
+fn find_named_processes_unix(process_name: &str) -> anyhow::Result<Vec<u32>> {
+    let output = Command::new("ps").args(["-eo", "pid,comm"]).output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected_name = process_name.to_ascii_lowercase();
+    let mut pids = Vec::new();
+
+    for line in stdout.lines().skip(1) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut parts = line.split_whitespace();
+        let Some(pid_str) = parts.next() else {
+            continue;
+        };
+        let Some(command_name) = parts.next() else {
+            continue;
+        };
+        let command_name = command_name.rsplit('/').next().unwrap_or(command_name);
+
+        if command_name.eq_ignore_ascii_case(&expected_name) {
+            let Ok(pid) = pid_str.parse::<u32>() else {
+                continue;
+            };
+            if pid != std::process::id() && !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+    }
+
+    Ok(pids)
+}
+
+#[cfg(windows)]
+fn find_named_processes_windows(process_name: &str) -> anyhow::Result<Vec<u32>> {
+    let image_name = format!("{process_name}.exe");
+    let command = format!(
+        "Get-CimInstance Win32_Process -Filter \"name = '{image_name}'\" | ForEach-Object {{ $_.ProcessId }}"
+    );
+    let output = Command::new("powershell")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args(["-NoProfile", "-Command", &command])
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut pids = Vec::new();
+
+    for line in stdout.lines() {
+        let Ok(pid) = line.trim().parse::<u32>() else {
+            continue;
+        };
+        if pid != std::process::id() && !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+
+    Ok(pids)
 }

@@ -8,9 +8,23 @@ import { HistoryPanel } from "./components/panels/HistoryPanel";
 import { SettingsPanel } from "./components/panels/SettingsPanel";
 import { useAccounts } from "./hooks/useAccounts";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import { checkCodexProcesses } from "./ipc";
-import type { AccountAction, AccountWithUsage, AppSettings, CodexProcessInfo, DiagnosticsSnapshot, Provider } from "./types";
+import {
+  checkClaudeProcesses,
+  checkCodexProcesses,
+  checkGeminiProcesses,
+} from "./ipc";
+import type {
+  AccountAction,
+  AccountWithUsage,
+  AppSettings,
+  ClaudeProcessInfo,
+  CodexProcessInfo,
+  DiagnosticsSnapshot,
+  GeminiProcessInfo,
+  Provider,
+} from "./types";
 import { computeLoadedBestAccount, formatPlanLabel, getRemainingPercent } from "./utils/accounts";
+import { formatEnglishDateTime } from "./utils/date";
 import { validateRefreshInterval } from "./utils/settings";
 
 type ConfigModalMode = "slim_export" | "slim_import";
@@ -27,7 +41,7 @@ function formatError(err: unknown) {
 }
 
 function formatHistoryDate(value: string) {
-  return new Date(value).toLocaleString();
+  return formatEnglishDateTime(value);
 }
 
 function normalizeVersion(version: string) {
@@ -60,7 +74,9 @@ export default function AppShell() {
   const [configCopied, setConfigCopied] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [processInfo, setProcessInfo] = useState<CodexProcessInfo | null>(null);
+  const [codexProcessInfo, setCodexProcessInfo] = useState<CodexProcessInfo | null>(null);
+  const [claudeProcessInfo, setClaudeProcessInfo] = useState<ClaudeProcessInfo | null>(null);
+  const [geminiProcessInfo, setGeminiProcessInfo] = useState<GeminiProcessInfo | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [, setIsExportingSlim] = useState(false);
   const [isImportingSlim, setIsImportingSlim] = useState(false);
@@ -113,18 +129,40 @@ export default function AppShell() {
   const checkProcesses = useCallback(async () => {
     try {
       const info = await checkCodexProcesses();
-      setProcessInfo(info);
+      setCodexProcessInfo(info);
       return info;
     } catch {
       return null;
     }
   }, []);
 
+  const checkClaudeProcessState = useCallback(async () => {
+    try {
+      setClaudeProcessInfo(await checkClaudeProcesses());
+    } catch {
+      setClaudeProcessInfo(null);
+    }
+  }, []);
+
+  const checkGeminiProcessState = useCallback(async () => {
+    try {
+      setGeminiProcessInfo(await checkGeminiProcesses());
+    } catch {
+      setGeminiProcessInfo(null);
+    }
+  }, []);
+
   useEffect(() => {
     void checkProcesses();
-    const interval = setInterval(() => void checkProcesses(), 3000);
+    void checkClaudeProcessState();
+    void checkGeminiProcessState();
+    const interval = setInterval(() => {
+      void checkProcesses();
+      void checkClaudeProcessState();
+      void checkGeminiProcessState();
+    }, 3000);
     return () => clearInterval(interval);
-  }, [checkProcesses]);
+  }, [checkClaudeProcessState, checkGeminiProcessState, checkProcesses]);
   useEffect(() => {
     if (!isActionsMenuOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
@@ -152,7 +190,7 @@ export default function AppShell() {
 
   const activeAccounts = accounts.filter((account) => account.is_active);
   const otherAccounts = filteredAccounts.filter((account) => !account.is_active);
-  const hasRunningProcesses = Boolean(processInfo?.count);
+  const hasRunningProcesses = Boolean(codexProcessInfo?.count);
   const selectedIds = useMemo(() => [...selectedAccountIds], [selectedAccountIds]);
   const selectedAccounts = useMemo(() => filteredAccounts.filter((account) => selectedAccountIds.has(account.id)), [filteredAccounts, selectedAccountIds]);
   const failedAccountIds = useMemo(() => filteredAccounts.filter((account) => account.usage?.error).map((account) => account.id), [filteredAccounts]);
@@ -367,6 +405,17 @@ export default function AppShell() {
   };
   const handleOpenHistory = async () => { try { setHistoryLoading(true); setIsHistoryOpen(true); setHistoryEntries(await listAccountHistory(undefined, 40)); } catch (err) { showToast(`Failed to load history: ${formatError(err)}`, true); } finally { setHistoryLoading(false); } };
   const handleOpenDiagnostics = async () => { try { setDiagnosticsLoading(true); setIsDiagnosticsOpen(true); setDiagnostics(await getDiagnostics()); } catch (err) { showToast(`Failed to load diagnostics: ${formatError(err)}`, true); } finally { setDiagnosticsLoading(false); } };
+  const handleRefreshDiagnostics = useCallback(async () => {
+    try {
+      setDiagnosticsLoading(true);
+      setDiagnostics(await getDiagnostics());
+      showToast("Diagnostics refreshed");
+    } catch (err) {
+      showToast(`Failed to refresh diagnostics: ${formatError(err)}`, true);
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }, [getDiagnostics, showToast]);
   const handleOpenSettings = async () => { try { setIsSettingsOpen(true); const settings = await loadAppSettings(); setSettingsDraft(settings); } catch (err) { showToast(`Failed to load settings: ${formatError(err)}`, true); } };
   const handleSettingsField = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setSettingsDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
   const handleSaveSettings = async () => {
@@ -469,7 +518,7 @@ export default function AppShell() {
   return (
     <div className="min-h-screen" style={{ background: "var(--color-bg-app)" }}>
       <ErrorBoundary fallbackTitle="Header failed">
-        <Header appVersion={appVersion} theme={theme} processInfo={processInfo} hasRunningProcesses={hasRunningProcesses} isActionsMenuOpen={isActionsMenuOpen} actionsMenuRef={actionsMenuRef} isRefreshing={isRefreshing} isWarmingAll={isWarmingAll} onThemeToggle={() => setTheme((current) => current === "light" ? "dark" : "light")} onOpenSettings={() => void handleOpenSettings()} onOpenHistory={handleOpenHistory} onOpenDiagnostics={handleOpenDiagnostics} onOpenRecommendationPicker={() => setIsRecommendationPickerOpen(true)} onRefresh={() => void handleRefresh()} onWarmupAll={() => void handleWarmupAll()} onToggleActionsMenu={() => setIsActionsMenuOpen((prev) => !prev)} onOpenAddModal={() => { setIsActionsMenuOpen(false); setIsAddModalOpen(true); }} onExportSlimText={() => { setIsActionsMenuOpen(false); void handleExportSlimText(); }} onOpenImportSlimText={() => { setIsActionsMenuOpen(false); openImportSlimTextModal(); }} onExportFullFile={() => { setIsActionsMenuOpen(false); void handleExportFullFile(false); }} onImportFullFile={() => { setIsActionsMenuOpen(false); void handleImportFullFile(); }} />
+        <Header appVersion={appVersion} theme={theme} codexProcessInfo={codexProcessInfo} claudeProcessInfo={claudeProcessInfo} geminiProcessInfo={geminiProcessInfo} hasRunningProcesses={hasRunningProcesses} isActionsMenuOpen={isActionsMenuOpen} actionsMenuRef={actionsMenuRef} isRefreshing={isRefreshing} isWarmingAllCodex={isWarmingAll} onThemeToggle={() => setTheme((current) => current === "light" ? "dark" : "light")} onOpenSettings={() => void handleOpenSettings()} onOpenHistory={handleOpenHistory} onOpenDiagnostics={handleOpenDiagnostics} onOpenRecommendationPicker={() => setIsRecommendationPickerOpen(true)} onRefresh={() => void handleRefresh()} onWarmupAllCodex={() => void handleWarmupAll()} onToggleActionsMenu={() => setIsActionsMenuOpen((prev) => !prev)} onOpenAddModal={() => { setIsActionsMenuOpen(false); setIsAddModalOpen(true); }} onExportSlimText={() => { setIsActionsMenuOpen(false); void handleExportSlimText(); }} onOpenImportSlimText={() => { setIsActionsMenuOpen(false); openImportSlimTextModal(); }} onExportFullFile={() => { setIsActionsMenuOpen(false); void handleExportFullFile(false); }} onImportFullFile={() => { setIsActionsMenuOpen(false); void handleImportFullFile(); }} />
       </ErrorBoundary>
       <ErrorBoundary fallbackTitle="Account grid failed">
         <AccountGrid loading={loading} error={error} accounts={accounts} filteredAccounts={filteredAccounts} activeAccounts={activeAccounts} otherAccounts={otherAccounts} sortedOtherAccounts={sortedOtherAccounts} selectedAccounts={selectedAccounts} selectedAccountIds={selectedAccountIds} failedAccountIds={failedAccountIds} loadedBestByProvider={loadedBestByProvider} appSettings={appSettings} otherAccountsSort={otherAccountsSort} bulkMode={false} refreshSuccess={refreshSuccess} maskedAccounts={maskedAccounts} switchingId={switchingId} warmingUpId={warmingUpId} isWarmingAll={isWarmingAll} onOtherAccountsSortChange={setOtherAccountsSort} onAddAccount={() => setIsAddModalOpen(true)} onToggleSelect={toggleSelect} onSwitch={(accountId) => void handleSwitch(accountId)} onWarmupAccount={handleWarmupAccount} onDelete={handleDelete} onRefreshSingle={refreshSingleUsage} onRepair={handleRepair} onRename={renameAccount} onUpdateTags={handleUpdateTags} onToggleMask={toggleMask} getSwitchDisabledReason={getSwitchDisabledReason} onSwitchBest={(provider) => void handleSwitchBest(provider)} onExportSelectedSlimText={() => void handleExportSelectedSlimText()} onExportSelectedFullFile={() => void handleExportFullFile(true)} onClearSelection={() => setSelectedAccountIds(new Set())} onRefreshFailed={() => void handleRefreshFailed()} onSelectFiltered={() => setSelectedAccountIds(new Set(filteredAccounts.map((account) => account.id)))} onRefreshSelected={() => void handleRefreshSelected()} onDeleteSelected={() => void handleDeleteSelected()} />
@@ -487,7 +536,7 @@ export default function AppShell() {
         <HistoryPanel isOpen={isHistoryOpen} historyLoading={historyLoading} historyEntries={historyEntries} onClose={() => setIsHistoryOpen(false)} formatHistoryDate={formatHistoryDate} />
       </ErrorBoundary>
       <ErrorBoundary fallbackTitle="Diagnostics panel failed">
-        <DiagnosticsPanel isOpen={isDiagnosticsOpen} diagnosticsLoading={diagnosticsLoading} diagnostics={diagnostics} onClose={() => setIsDiagnosticsOpen(false)} formatHistoryDate={formatHistoryDate} />
+        <DiagnosticsPanel isOpen={isDiagnosticsOpen} diagnosticsLoading={diagnosticsLoading} diagnostics={diagnostics} onClose={() => setIsDiagnosticsOpen(false)} onRefreshDiagnostics={() => void handleRefreshDiagnostics()} formatHistoryDate={formatHistoryDate} />
       </ErrorBoundary>
       {isRecommendationPickerOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center sf-overlay"><div className="mx-4 w-full max-w-md rounded-2xl sf-panel"><div className="flex items-center justify-between border-b p-5" style={{ borderColor: "var(--color-border)" }}><h2 className="text-lg font-semibold" style={{ color: "var(--color-text-primary)" }}>Switch To Best Account</h2><button onClick={() => setIsRecommendationPickerOpen(false)} style={{ color: "var(--color-text-muted)" }}>✕</button></div><div className="space-y-3 p-5">{PROVIDERS.map((provider) => { const account = bestByProvider.get(provider); return <button key={provider} onClick={() => void handleSwitchBest(provider)} className="w-full rounded-xl border px-4 py-3 text-left" style={{ borderColor: "var(--color-border)", background: "var(--color-bg-card)" }}><div className="font-medium capitalize" style={{ color: "var(--color-text-primary)" }}>{provider}</div><div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>{provider === "gemini" ? "Usage-only provider" : account ? `${account.name} • ${formatPlanLabel(account.usage?.plan_type ?? account.plan_type, account.auth_mode)} • ${getRemainingPercent(account).toFixed(1)}% remaining` : "No switchable account available"}</div></button>; })}</div></div></div> : null}
     </div>

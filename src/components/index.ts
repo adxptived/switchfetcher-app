@@ -5,3 +5,4 @@ export { Badge } from "./Badge";
 export { ErrorBoundary } from "./ErrorBoundary";
 export { Header } from "./Header";
 export { AccountGrid } from "./AccountGrid";
+export { Toggle } from "./Toggle";

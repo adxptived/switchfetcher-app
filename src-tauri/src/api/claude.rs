@@ -207,7 +207,8 @@ pub(crate) fn save_runtime_claude_credentials_to_path(
     let mut root = if path.exists() {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read file: {}", path.display()))?;
-        serde_json::from_str::<Value>(&content).unwrap_or_else(|_| Value::Object(Map::new()))
+        serde_json::from_str::<Value>(&content)
+            .with_context(|| format!("Failed to parse existing Claude credentials file: {}", path.display()))?
     } else {
         Value::Object(Map::new())
     };
@@ -424,13 +425,23 @@ fn map_account_type_to_plan_type(
     account_type: Option<&str>,
     fallback: Option<&str>,
 ) -> Option<String> {
-    match account_type.map(str::trim).filter(|value| !value.is_empty()) {
-        Some("claude_max") => Some("Max".to_string()),
-        Some("pro") => Some("Pro".to_string()),
-        Some("free") => Some("Free".to_string()),
-        Some("api_usage_billing") => Some("API".to_string()),
-        Some(_) | None => fallback.map(ToOwned::to_owned),
+    fn normalize(value: &str) -> Option<String> {
+        Some(
+            match value.trim() {
+                "" => return None,
+                "claude_max" | "max" => "Max",
+                "claude_pro" | "pro" => "Pro",
+                "free" => "Free",
+                "api_usage_billing" => "API",
+                other => return Some(other.to_owned()),
+            }
+            .to_owned(),
+        )
     }
+
+    account_type
+        .and_then(normalize)
+        .or_else(|| fallback.and_then(normalize))
 }
 
 #[cfg(test)]
@@ -442,7 +453,9 @@ mod tests {
         is_invalid_grant_response, is_invalid_bearer_error_message,
         is_invalid_bearer_response, map_account_type_to_plan_type,
         read_claude_credentials_from_path, retry_delay_seconds,
+        save_runtime_claude_credentials_to_path,
         claude_credentials_from_account, ClaudeUsageResponse,
+        ClaudeCredentials,
     };
     use reqwest::{header::{HeaderValue, USER_AGENT}, StatusCode};
     use crate::types::StoredAccount;
@@ -476,6 +489,18 @@ mod tests {
         assert_eq!(
             map_account_type_to_plan_type(Some("unknown"), Some("legacy")).as_deref(),
             Some("legacy")
+        );
+    }
+
+    #[test]
+    fn normalizes_known_fallback_plan_labels() {
+        assert_eq!(
+            map_account_type_to_plan_type(None, Some("claude_max")).as_deref(),
+            Some("Max")
+        );
+        assert_eq!(
+            map_account_type_to_plan_type(None, Some("claude_pro")).as_deref(),
+            Some("Pro")
         );
     }
 
@@ -620,5 +645,29 @@ mod tests {
         assert_eq!(parsed.refresh_token, "stored-refresh");
         assert_eq!(parsed.expires_at, 123);
         assert_eq!(parsed.subscription_type.as_deref(), Some("claude_pro"));
+    }
+
+    #[test]
+    fn save_runtime_credentials_fails_for_invalid_existing_json() {
+        let dir = std::env::temp_dir().join(format!("switchfetcher-claude-save-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        let path = dir.join(".credentials.json");
+        fs::write(&path, "{").expect("broken credentials file should be written");
+
+        let result = save_runtime_claude_credentials_to_path(
+            &path,
+            &ClaudeCredentials {
+                access_token: "access".to_string(),
+                refresh_token: "refresh".to_string(),
+                expires_at: 1763000000000,
+                subscription_type: Some("claude_max".to_string()),
+            },
+        );
+
+        assert!(result.is_err());
+        let error = result.err().expect("error should exist").to_string();
+        assert!(error.contains("Failed to parse existing Claude credentials file"));
+
+        fs::remove_dir_all(dir).ok();
     }
 }

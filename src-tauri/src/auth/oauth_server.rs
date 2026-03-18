@@ -18,6 +18,71 @@ const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEFAULT_PORT: u16 = 1455; // Same as official Codex
 const CALLBACK_HOST: &str = "127.0.0.1";
+const TOKEN_EXCHANGE_TIMEOUT_SECONDS: u64 = 20;
+const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Login Successful — Switchfetcher</title>
+    <meta charset="utf-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1117;
+            display: flex; justify-content: center; align-items: center;
+            min-height: 100vh; color: #fff;
+        }
+        .card {
+            background: #1a1d27;
+            border: 1px solid #2a2d3a;
+            border-radius: 16px;
+            padding: 40px 48px;
+            text-align: center;
+            max-width: 400px; width: 90%;
+            box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+        }
+        .brand {
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            margin-bottom: 32px;
+            font-size: 12px; font-weight: 600; letter-spacing: 0.1em;
+            text-transform: uppercase; color: #6b7280;
+        }
+        .brand-dot { width: 8px; height: 8px; background: #10b981; border-radius: 50%; }
+        .check {
+            width: 64px; height: 64px;
+            background: rgba(16,185,129,0.1); border: 2px solid #10b981;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 24px;
+            font-size: 26px; color: #10b981;
+        }
+        h1 { font-size: 22px; font-weight: 700; color: #f9fafb; margin-bottom: 12px; }
+        .email {
+            display: inline-block;
+            font-size: 13px; color: #10b981; font-weight: 500;
+            background: rgba(16,185,129,0.08);
+            padding: 5px 14px; border-radius: 20px; margin-bottom: 20px;
+        }
+        .hint { font-size: 13px; color: #6b7280; line-height: 1.5; }
+        .countdown { margin-top: 14px; font-size: 12px; color: #4b5563; }
+        .countdown span { color: #10b981; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="brand"><div class="brand-dot"></div>Switchfetcher</div>
+        <div class="check">&#10003;</div>
+        <h1>Login Successful!</h1>
+        <div class="email">__EMAIL__</div>
+        <p class="hint">You can close this window and return to Switchfetcher.</p>
+        <p class="countdown">Closing in <span id="c">3</span>&#8230;</p>
+    </div>
+    <script>
+        var n=3,el=document.getElementById('c');
+        var t=setInterval(function(){n--;if(n<=0){clearInterval(t);window.close();}else{el.textContent=n;}},1000);
+    </script>
+</body>
+</html>"#;
 
 /// PKCE codes for OAuth
 #[derive(Debug, Clone)]
@@ -98,7 +163,10 @@ async fn exchange_code_for_tokens(
     pkce: &PkceCodes,
     code: &str,
 ) -> Result<TokenResponse> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(TOKEN_EXCHANGE_TIMEOUT_SECONDS))
+        .build()
+        .context("Failed to create OAuth HTTP client")?;
 
     let body = format!(
         "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
@@ -130,6 +198,10 @@ async fn exchange_code_for_tokens(
 }
 
 /// Parse claims from JWT ID token
+///
+/// This intentionally decodes the provider-issued ID token payload without local
+/// signature verification because the desktop client only needs display claims
+/// after the OAuth server exchange succeeds.
 fn parse_id_token_claims(id_token: &str) -> (Option<String>, Option<String>, Option<String>) {
     let parts: Vec<&str> = id_token.split('.').collect();
     if parts.len() != 3 {
@@ -180,7 +252,6 @@ pub async fn start_oauth_login(
     let state = generate_state();
 
     println!("[OAuth] Starting login for account: {account_name}");
-    println!("[OAuth] PKCE challenge: {}", &pkce.code_challenge[..20]);
 
     // Try official default port first; fall back to a random free port if it is busy.
     let server = match Server::http(format!("{CALLBACK_HOST}:{DEFAULT_PORT}")) {
@@ -206,8 +277,7 @@ pub async fn start_oauth_login(
     let auth_url = build_authorize_url(DEFAULT_ISSUER, CLIENT_ID, &redirect_uri, &pkce, &state);
 
     println!("[OAuth] Server started on port {actual_port}");
-    println!("[OAuth] Redirect URI: {redirect_uri}");
-    println!("[OAuth] Auth URL: {auth_url}");
+    println!("[OAuth] Authorization URL prepared");
 
     let login_info = OAuthLoginInfo {
         auth_url: auth_url.clone(),
@@ -225,15 +295,19 @@ pub async fn start_oauth_login(
     let cancelled_clone = cancelled.clone();
 
     thread::spawn(move || {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let result = runtime.block_on(run_oauth_server(
-            server,
-            pkce_clone,
-            state_clone,
-            redirect_uri,
-            account_name,
-            cancelled_clone,
-        ));
+        let result = match tokio::runtime::Runtime::new() {
+            Ok(runtime) => runtime.block_on(run_oauth_server(
+                server,
+                pkce_clone,
+                state_clone,
+                redirect_uri,
+                account_name,
+                cancelled_clone,
+            )),
+            Err(err) => Err(anyhow::anyhow!(
+                "Failed to initialize OAuth runtime: {err}"
+            )),
+        };
         let _ = tx.send(result);
     });
 
@@ -382,31 +456,17 @@ async fn handle_oauth_request(
                 );
 
                 // Send success response
-                let success_html = r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>Login Successful</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-        .container { text-align: center; background: white; padding: 40px 60px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
-        h1 { color: #333; margin-bottom: 10px; }
-        p { color: #666; }
-        .checkmark { font-size: 48px; margin-bottom: 20px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="checkmark">✓</div>
-        <h1>Login Successful!</h1>
-        <p>You can close this window and return to Switchfetcher.</p>
-    </div>
-</body>
-</html>"#;
+                let email_display = account.email.as_deref().unwrap_or("Account added");
+                let success_html = SUCCESS_HTML.replace("__EMAIL__", email_display);
 
-                let response = Response::from_string(success_html).with_header(
-                    Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
-                        .unwrap(),
-                );
+                let response = if let Ok(content_type) = Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"text/html; charset=utf-8"[..],
+                ) {
+                    Response::from_string(success_html).with_header(content_type)
+                } else {
+                    Response::from_string(success_html)
+                };
                 let _ = request.respond(response);
 
                 return HandleResult::Success(account);

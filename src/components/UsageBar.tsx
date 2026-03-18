@@ -1,4 +1,5 @@
 import type { UsageInfo } from "../types";
+import { formatEnglishMonthName } from "../utils/date";
 
 interface UsageBarProps {
   usage?: UsageInfo;
@@ -20,7 +21,7 @@ function formatExactResetTime(resetAt: number | null | undefined, use24h: boolea
   if (!resetAt) return "";
 
   const date = new Date(resetAt * 1000);
-  const month = new Intl.DateTimeFormat(undefined, { month: "long" }).format(date);
+  const month = formatEnglishMonthName(date);
   const day = date.getDate();
   const hours = date.getHours();
   const minutes = String(date.getMinutes()).padStart(2, "0");

@@ -1,6 +1,7 @@
 //! Usage query Tauri commands
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use futures::stream::{self, StreamExt};
 use tauri::{AppHandle, Emitter, Manager};
@@ -32,6 +33,8 @@ pub struct ClaudeResetWatchState {
     snapshots: HashMap<String, ClaudeResetSnapshot>,
     usage_thresholds: HashMap<String, f64>,
 }
+
+type ActiveAccountIds = HashMap<Provider, String>;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ClaudeRestoreChange {
@@ -165,7 +168,7 @@ fn emit_reset_restore_notifications(
     usage_list: &[UsageInfo],
     settings: &AppSettings,
 ) {
-    let state_mutex = app.state::<std::sync::Mutex<ClaudeResetWatchState>>();
+    let state_mutex = app.state::<Mutex<ClaudeResetWatchState>>();
     let mut state = state_mutex.lock().unwrap();
 
     for usage in usage_list {
@@ -220,7 +223,7 @@ fn emit_usage_threshold_notifications(
         return;
     }
 
-    let state_mutex = app.state::<std::sync::Mutex<ClaudeResetWatchState>>();
+    let state_mutex = app.state::<Mutex<ClaudeResetWatchState>>();
     let mut state = state_mutex.lock().unwrap();
 
     for usage in usage_list {
@@ -337,19 +340,18 @@ fn should_skip_usage_refresh(account: &StoredAccount, active_account_id: Option<
 }
 
 async fn refresh_usage_stream(app: &AppHandle, accounts: Vec<StoredAccount>) -> Vec<UsageInfo> {
+    let active_account_ids = collect_active_account_ids()
+        .unwrap_or_else(|_| HashMap::new());
     let mut results = Vec::with_capacity(accounts.len());
     let (claude_accounts, other_accounts): (Vec<_>, Vec<_>) = accounts
         .into_iter()
         .partition(|account| account.provider == Provider::Claude);
 
+    let active_for_other = active_account_ids.clone();
     let mut concurrent = stream::iter(other_accounts.into_iter().map(|account| async move {
-        let active_account_id = load_accounts()
-            .ok()
-            .and_then(|store| {
-                store
-                    .active_account_id_for_provider(account.provider)
-                    .map(str::to_string)
-            });
+        let active_account_id = active_for_other
+            .get(&account.provider)
+            .map(String::as_str);
         fetch_usage_for_account_with_active_id(account, active_account_id.as_deref()).await
     }))
         .buffer_unordered(CONCURRENT_USAGE_REFRESH_LIMIT);
@@ -363,13 +365,7 @@ async fn refresh_usage_stream(app: &AppHandle, accounts: Vec<StoredAccount>) -> 
         if previous_was_claude {
             sleep(Duration::from_millis(CLAUDE_USAGE_PACING_MS)).await;
         }
-        let active_account_id = load_accounts()
-            .ok()
-            .and_then(|store| {
-                store
-                    .active_account_id_for_provider(account.provider)
-                    .map(str::to_string)
-            });
+        let active_account_id = active_account_ids.get(&account.provider).map(String::as_str);
         let usage = fetch_usage_for_account_with_active_id(account, active_account_id.as_deref()).await;
         emit_usage_updated(app, &usage);
         results.push(usage);
@@ -406,6 +402,17 @@ async fn refresh_accounts_usage_internal(
     tray::update_usage_cache(&app, &usage);
     tray::set_tray_icon_warning(&app, crate::watcher::should_warn_tray(&store, &usage));
     Ok(usage)
+}
+
+fn collect_active_account_ids() -> Result<ActiveAccountIds, String> {
+    let store = load_accounts().map_err(|err| err.to_string())?;
+    Ok([Provider::Codex, Provider::Claude, Provider::Gemini]
+        .into_iter()
+        .filter_map(|provider| {
+            store.active_account_id_for_provider(provider)
+                .map(|account_id| (provider, account_id.to_string()))
+        })
+        .collect())
 }
 
 fn record_refresh_history(store: &mut AccountsStore, usage_list: &[UsageInfo]) {

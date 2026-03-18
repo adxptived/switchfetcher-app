@@ -2,6 +2,7 @@ import { AccountCard } from "./AccountCard";
 import { Badge } from "./Badge";
 import type { AccountWithUsage, AppSettings, Provider } from "../types";
 import { formatPlanLabel, getRemainingPercent } from "../utils/accounts";
+import { formatEnglishDateTime } from "../utils/date";
 
 type SortMode = "deadline_asc" | "deadline_desc" | "remaining_desc" | "remaining_asc";
 
@@ -49,7 +50,7 @@ interface AccountGridProps {
 
 function formatResetAt(value: number | null | undefined) {
   if (!value) return "No reset window";
-  return new Date(value * 1000).toLocaleString();
+  return formatEnglishDateTime(value * 1000);
 }
 
 export function AccountGrid(props: AccountGridProps) {
