@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  
   <a href="https://github.com/adxptived/switchfetcher-app/releases"><img alt="Version" src="https://img.shields.io/github/v/release/adxptived/switchfetcher-app"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2B-0078D6">
 </p>
@@ -83,6 +83,4 @@ If you are changing provider integrations or credential handling, include any ma
 
 Switchfetcher is intended for managing your own local accounts. It is not built for credential sharing, pooling, or multi-user redistribution.
 
-## License
 
-Released under the MIT License. See [LICENSE](LICENSE).
