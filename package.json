@@ -1,7 +1,7 @@
 {
   "name": "switchfetcher",
   "private": true,
-  "version": "0.1.1",
+  "version": "2.0.0",
   "description": "A multi-provider account manager for Codex, Claude, and Gemini",
   "type": "module",
   "scripts": {
