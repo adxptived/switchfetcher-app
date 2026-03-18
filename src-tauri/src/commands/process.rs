@@ -282,25 +282,63 @@ fn find_named_processes_unix(process_name: &str) -> anyhow::Result<Vec<u32>> {
 #[cfg(windows)]
 fn find_named_processes_windows(process_name: &str) -> anyhow::Result<Vec<u32>> {
     let image_name = format!("{process_name}.exe");
-    let command = format!(
-        "Get-CimInstance Win32_Process -Filter \"name = '{image_name}'\" | ForEach-Object {{ $_.ProcessId }}"
-    );
-    let output = Command::new("powershell")
+    let output = Command::new("tasklist")
         .creation_flags(CREATE_NO_WINDOW)
-        .args(["-NoProfile", "-Command", &command])
+        .args(["/FI", &format!("IMAGENAME eq {image_name}"), "/FO", "CSV", "/NH"])
         .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_tasklist_named_processes(
+        &stdout,
+        &image_name,
+        std::process::id(),
+    ))
+}
+
+#[cfg(windows)]
+fn parse_tasklist_named_processes(stdout: &str, image_name: &str, current_pid: u32) -> Vec<u32> {
+    let expected_name = image_name.to_ascii_lowercase();
     let mut pids = Vec::new();
 
     for line in stdout.lines() {
-        let Ok(pid) = line.trim().parse::<u32>() else {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() <= 1 {
+            continue;
+        }
+
+        let name = parts[0].trim().trim_matches('"').to_ascii_lowercase();
+        if name != expected_name {
+            continue;
+        }
+
+        let Ok(pid) = parts[1].trim().trim_matches('"').parse::<u32>() else {
             continue;
         };
-        if pid != std::process::id() && !pids.contains(&pid) {
+        if pid != current_pid && !pids.contains(&pid) {
             pids.push(pid);
         }
     }
 
-    Ok(pids)
+    pids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_tasklist_named_process_output() {
+        let current_pid = std::process::id();
+        let output = format!(
+            "\"codex.exe\",\"123\",\"Console\",\"1\",\"10,000 K\"\n\
+             \"CODEX.EXE\",\"123\",\"Console\",\"1\",\"10,000 K\"\n\
+             \"codex.exe\",\"{current_pid}\",\"Console\",\"1\",\"10,000 K\"\n\
+             \"pwsh.exe\",\"456\",\"Console\",\"1\",\"10,000 K\"\n"
+        );
+
+        let pids = parse_tasklist_named_processes(&output, "codex.exe", current_pid);
+
+        assert_eq!(pids, vec![123]);
+    }
 }

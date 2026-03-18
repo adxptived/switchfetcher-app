@@ -66,7 +66,29 @@ pub fn spawn_background_watch(app: AppHandle) {
 
 pub fn request_immediate_refresh<R: Runtime>(app: &AppHandle<R>) {
     let state_mutex = app.state::<Mutex<RefreshControllerState>>();
-    let mut state = state_mutex.blocking_lock();
+    if try_request_immediate_refresh(&state_mutex) {
+        return;
+    }
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state_mutex = app.state::<Mutex<RefreshControllerState>>();
+        mark_immediate_refresh_requested(&state_mutex).await;
+    });
+}
+
+fn try_request_immediate_refresh(state_mutex: &Mutex<RefreshControllerState>) -> bool {
+    match state_mutex.try_lock() {
+        Ok(mut state) => {
+            state.immediate_requested = true;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+async fn mark_immediate_refresh_requested(state_mutex: &Mutex<RefreshControllerState>) {
+    let mut state = state_mutex.lock().await;
     state.immediate_requested = true;
 }
 
@@ -178,11 +200,16 @@ pub fn should_warn_tray(store: &AccountsStore, usage_list: &[UsageInfo]) -> bool
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::{TimeZone, Utc};
+    use tokio::task::yield_now;
+    use tokio::sync::Mutex;
 
     use super::{
+        mark_immediate_refresh_requested, try_request_immediate_refresh,
         automatic_refresh_cooldown_seconds, should_warn_tray,
-        AUTO_REFRESH_FAILURE_COOLDOWN_SECONDS,
+        AUTO_REFRESH_FAILURE_COOLDOWN_SECONDS, RefreshControllerState,
     };
     use crate::types::{
         AccountAction, AccountActionKind, AccountsStore, Provider, StoredAccount, UsageInfo,
@@ -283,5 +310,36 @@ mod tests {
         );
         assert_eq!(automatic_refresh_cooldown_seconds(3), 600);
         assert_eq!(automatic_refresh_cooldown_seconds(4), 600);
+    }
+
+    #[tokio::test]
+    async fn try_request_immediate_refresh_reports_busy_when_locked() {
+        let state_mutex = Mutex::new(RefreshControllerState::default());
+        let _guard = state_mutex.lock().await;
+
+        assert!(!try_request_immediate_refresh(&state_mutex));
+    }
+
+    #[tokio::test]
+    async fn mark_immediate_refresh_requested_waits_until_lock_is_released() {
+        let state_mutex = Arc::new(Mutex::new(RefreshControllerState {
+            immediate_requested: false,
+            ..RefreshControllerState::default()
+        }));
+
+        let guard = state_mutex.lock().await;
+        let state_clone = Arc::clone(&state_mutex);
+        let task = tokio::spawn(async move {
+            mark_immediate_refresh_requested(state_clone.as_ref()).await;
+        });
+
+        yield_now().await;
+        assert!(!task.is_finished());
+
+        drop(guard);
+        task.await.expect("immediate refresh task should complete");
+
+        let state = state_mutex.lock().await;
+        assert!(state.immediate_requested);
     }
 }
