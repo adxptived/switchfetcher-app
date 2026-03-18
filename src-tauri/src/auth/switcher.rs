@@ -46,15 +46,13 @@ pub fn switch_to_account(account: &StoredAccount) -> Result<()> {
             },
         ) => {
             let path = get_claude_credentials_file()?;
-            let payload = ClaudeCredentialsFile {
-                claude_ai_oauth: ClaudeCredentialsPayload {
-                    access_token: access_token.clone(),
-                    refresh_token: refresh_token.clone(),
-                    expires_at: *expires_at,
-                    subscription_type: subscription_type.clone(),
-                },
+            let credentials = crate::api::claude::ClaudeCredentials {
+                access_token: access_token.clone(),
+                refresh_token: refresh_token.clone(),
+                expires_at: *expires_at,
+                subscription_type: subscription_type.clone(),
             };
-            write_json_file(&path, &payload)
+            crate::api::claude::save_runtime_claude_credentials_to_path(&path, &credentials)
         }
         (Provider::Gemini, AuthData::GeminiOAuth { .. }) => {
             anyhow::bail!("Gemini OAuth switching is not validated yet and remains disabled")
@@ -188,24 +186,6 @@ pub fn has_active_login() -> Result<bool> {
         Some(auth) => Ok(auth.openai_api_key.is_some() || auth.tokens.is_some()),
         None => Ok(false),
     }
-}
-
-#[derive(Serialize)]
-struct ClaudeCredentialsFile {
-    #[serde(rename = "claudeAiOauth")]
-    claude_ai_oauth: ClaudeCredentialsPayload,
-}
-
-#[derive(Serialize)]
-struct ClaudeCredentialsPayload {
-    #[serde(rename = "accessToken")]
-    access_token: String,
-    #[serde(rename = "refreshToken")]
-    refresh_token: String,
-    #[serde(rename = "expiresAt")]
-    expires_at: i64,
-    #[serde(rename = "subscriptionType", skip_serializing_if = "Option::is_none")]
-    subscription_type: Option<String>,
 }
 
 fn get_claude_credentials_file() -> Result<PathBuf> {

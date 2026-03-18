@@ -93,23 +93,12 @@ struct ClaudeExtraUsage {
 }
 
 pub async fn get_claude_usage(account: &StoredAccount) -> Result<UsageInfo> {
-    if !matches!(account.auth_data, AuthData::ClaudeOAuth { .. }) {
-        anyhow::bail!("Claude account is missing OAuth credentials");
-    }
-
-    let credentials_path = get_claude_credentials_path()?;
-    let credentials = runtime_claude_credentials_from_path(account, &credentials_path)
-        .with_context(|| {
-            format!(
-                "Failed to load Claude runtime credentials from {}",
-                credentials_path.display()
-            )
-        })?;
+    let credentials = claude_credentials_from_account(account)?;
 
     let body = match fetch_claude_usage_body(&credentials.access_token).await {
         Ok(body) => body,
         Err(err) if is_auth_failure_error_message(&err.to_string()) => {
-            refresh_usage_after_auth_failure(account, &credentials_path, &credentials).await?
+            refresh_usage_after_auth_failure(account, &credentials).await?
         }
         Err(err) => return Err(err),
     };
@@ -171,60 +160,36 @@ pub async fn read_claude_credentials_from_path(path: &str) -> Result<ClaudeCrede
 
 async fn refresh_usage_after_auth_failure(
     account: &StoredAccount,
-    credentials_path: &Path,
-    file_credentials: &ClaudeCredentials,
+    stored_credentials: &ClaudeCredentials,
 ) -> Result<String> {
-    let refreshed = refresh_claude_token(&file_credentials.refresh_token)
+    let refreshed = refresh_claude_token(&stored_credentials.refresh_token)
         .await
-        .with_context(|| {
-            format!(
-                "Claude runtime credentials in {} are invalid. Run `claude login` and re-import if needed",
-                credentials_path.display()
-            )
-        })?;
-    persist_runtime_claude_credentials(account, credentials_path, refreshed.clone())?;
+        .context("Stored Claude OAuth credentials are invalid. Reconnect or re-import the account if needed")?;
+    update_claude_tokens(
+        &account.id,
+        refreshed.access_token.clone(),
+        refreshed.refresh_token.clone(),
+        refreshed.expires_at,
+        refreshed.subscription_type.clone(),
+    )?;
     fetch_claude_usage_body(&refreshed.access_token).await
 }
 
-fn persist_runtime_claude_credentials(
-    account: &StoredAccount,
-    credentials_path: &Path,
-    credentials: ClaudeCredentials,
-) -> Result<ClaudeCredentials> {
-    save_runtime_claude_credentials_to_path(credentials_path, &credentials)?;
-    let persisted = update_claude_tokens(
-        &account.id,
-        credentials.access_token.clone(),
-        credentials.refresh_token.clone(),
-        credentials.expires_at,
-        credentials.subscription_type.clone(),
-    )?;
-
-    match persisted.auth_data {
+fn claude_credentials_from_account(account: &StoredAccount) -> Result<ClaudeCredentials> {
+    match &account.auth_data {
         AuthData::ClaudeOAuth {
             access_token,
             refresh_token,
             expires_at,
             subscription_type,
         } => Ok(ClaudeCredentials {
-            access_token,
-            refresh_token,
-            expires_at,
-            subscription_type,
+            access_token: access_token.clone(),
+            refresh_token: refresh_token.clone(),
+            expires_at: *expires_at,
+            subscription_type: subscription_type.clone(),
         }),
-        _ => anyhow::bail!("Claude account auth mode changed unexpectedly"),
+        _ => anyhow::bail!("Claude account is missing OAuth credentials"),
     }
-}
-
-pub(crate) fn runtime_claude_credentials_from_path(
-    account: &StoredAccount,
-    path: &Path,
-) -> Result<ClaudeCredentials> {
-    if !matches!(account.auth_data, AuthData::ClaudeOAuth { .. }) {
-        anyhow::bail!("Claude account is missing OAuth credentials");
-    }
-
-    read_claude_credentials_file(path)
 }
 
 fn read_claude_credentials_file(path: &Path) -> Result<ClaudeCredentials> {
@@ -235,7 +200,7 @@ fn read_claude_credentials_file(path: &Path) -> Result<ClaudeCredentials> {
     Ok(parsed.claude_ai_oauth)
 }
 
-fn save_runtime_claude_credentials_to_path(
+pub(crate) fn save_runtime_claude_credentials_to_path(
     path: &Path,
     credentials: &ClaudeCredentials,
 ) -> Result<()> {
@@ -477,7 +442,7 @@ mod tests {
         is_invalid_grant_response, is_invalid_bearer_error_message,
         is_invalid_bearer_response, map_account_type_to_plan_type,
         read_claude_credentials_from_path, retry_delay_seconds,
-        runtime_claude_credentials_from_path, ClaudeUsageResponse,
+        claude_credentials_from_account, ClaudeUsageResponse,
     };
     use reqwest::{header::{HeaderValue, USER_AGENT}, StatusCode};
     use crate::types::StoredAccount;
@@ -639,24 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_credentials_are_loaded_directly_from_file() {
-        let dir =
-            std::env::temp_dir().join(format!("switchfetcher-claude-runtime-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).expect("temp dir should be created");
-        let path = dir.join(".credentials.json");
-        fs::write(
-            &path,
-            r#"{
-                "claudeAiOauth": {
-                    "accessToken": "runtime-access",
-                    "refreshToken": "runtime-refresh",
-                    "expiresAt": 1763000000000,
-                    "subscriptionType": "claude_max"
-                }
-            }"#,
-        )
-        .expect("credentials file should be written");
-
+    fn credentials_are_loaded_from_stored_account_auth_data() {
         let account = StoredAccount::new_claude_oauth(
             "Claude".to_string(),
             "stored-access".to_string(),
@@ -665,14 +613,12 @@ mod tests {
             Some("claude_pro".to_string()),
         );
 
-        let parsed = runtime_claude_credentials_from_path(&account, &path)
-            .expect("runtime credentials should load from file");
+        let parsed = claude_credentials_from_account(&account)
+            .expect("credentials should load from stored auth data");
 
-        assert_eq!(parsed.access_token, "runtime-access");
-        assert_eq!(parsed.refresh_token, "runtime-refresh");
-        assert_eq!(parsed.expires_at, 1763000000000);
-        assert_eq!(parsed.subscription_type.as_deref(), Some("claude_max"));
-
-        fs::remove_dir_all(dir).ok();
+        assert_eq!(parsed.access_token, "stored-access");
+        assert_eq!(parsed.refresh_token, "stored-refresh");
+        assert_eq!(parsed.expires_at, 123);
+        assert_eq!(parsed.subscription_type.as_deref(), Some("claude_pro"));
     }
 }

@@ -59,11 +59,13 @@ function RateLimitBar({
   
   // Color based on remaining (green = plenty left, red = almost none left)
   const colorClass =
-    remainingPercent <= 10
+    remainingPercent <= 14
       ? "bg-red-500"
-      : remainingPercent <= 30
-        ? "bg-amber-500"
-        : "bg-emerald-500";
+      : remainingPercent <= 29
+        ? "bg-orange-500"
+        : remainingPercent <= 49
+          ? "bg-yellow-400"
+          : "bg-emerald-500";
 
   const windowLabel = formatWindowDuration(windowMinutes);
   const resetLabel = formatResetTime(resetsAt);

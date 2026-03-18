@@ -9,6 +9,8 @@ pub mod types;
 pub mod tray;
 pub mod watcher;
 
+use tauri::Manager;
+
 use commands::{
     add_account_from_file, add_session_cookie_account, cancel_login, check_codex_processes,
     complete_login, delete_account, delete_accounts_bulk, export_accounts_full_encrypted_file,
@@ -29,6 +31,12 @@ use settings::{
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
