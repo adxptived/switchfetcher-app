@@ -1,6 +1,5 @@
-use std::sync::Mutex;
-
 use chrono::{DateTime, Duration, Utc};
+use tokio::sync::Mutex;
 use tokio::time::{interval, Duration as TokioDuration, MissedTickBehavior};
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -49,11 +48,11 @@ pub fn spawn_background_watch(app: AppHandle) {
             ticker.tick().await;
 
             let settings = load_app_settings().unwrap_or_default();
-            if !should_start_automatic_refresh(&app, &settings) {
+            if !should_start_automatic_refresh(&app, &settings).await {
                 continue;
             }
 
-            if !begin_refresh(&app, RefreshOrigin::Automatic) {
+            if !begin_refresh(&app, RefreshOrigin::Automatic).await {
                 continue;
             }
 
@@ -67,13 +66,13 @@ pub fn spawn_background_watch(app: AppHandle) {
 
 pub fn request_immediate_refresh<R: Runtime>(app: &AppHandle<R>) {
     let state_mutex = app.state::<Mutex<RefreshControllerState>>();
-    let mut state = state_mutex.lock().unwrap();
+    let mut state = state_mutex.blocking_lock();
     state.immediate_requested = true;
 }
 
-pub fn begin_refresh<R: Runtime>(app: &AppHandle<R>, origin: RefreshOrigin) -> bool {
+pub async fn begin_refresh<R: Runtime>(app: &AppHandle<R>, origin: RefreshOrigin) -> bool {
     let state_mutex = app.state::<Mutex<RefreshControllerState>>();
-    let mut state = state_mutex.lock().unwrap();
+    let mut state = state_mutex.lock().await;
     if state.in_flight {
         if origin == RefreshOrigin::Automatic {
             state.immediate_requested = true;
@@ -88,13 +87,13 @@ pub fn begin_refresh<R: Runtime>(app: &AppHandle<R>, origin: RefreshOrigin) -> b
     true
 }
 
-pub fn finish_refresh<R: Runtime>(
+pub async fn finish_refresh<R: Runtime>(
     app: &AppHandle<R>,
     origin: RefreshOrigin,
     result: Result<(), ()>,
 ) {
     let state_mutex = app.state::<Mutex<RefreshControllerState>>();
-    let mut state = state_mutex.lock().unwrap();
+    let mut state = state_mutex.lock().await;
     state.in_flight = false;
     if origin == RefreshOrigin::Automatic {
         let now = Utc::now();
@@ -117,12 +116,12 @@ fn automatic_refresh_cooldown_seconds(consecutive_failure_count: u32) -> i64 {
     }
 }
 
-fn should_start_automatic_refresh<R: Runtime>(
+async fn should_start_automatic_refresh<R: Runtime>(
     app: &AppHandle<R>,
     settings: &AppSettings,
 ) -> bool {
     let state_mutex = app.state::<Mutex<RefreshControllerState>>();
-    let state = state_mutex.lock().unwrap();
+    let state = state_mutex.lock().await;
     if state.in_flight {
         return false;
     }
@@ -170,9 +169,10 @@ pub fn should_warn_tray(store: &AccountsStore, usage_list: &[UsageInfo]) -> bool
 
     usage_list.iter().any(|usage| {
         usage.error.is_some()
-            || usage.primary_resets_at.and_then(DateTime::<Utc>::from_timestamp).is_some_and(
-                |reset_at| reset_at >= now && (reset_at - now) <= Duration::minutes(10),
-            )
+            || usage
+                .primary_resets_at
+                .and_then(|resets_at| DateTime::<Utc>::from_timestamp(resets_at, 0))
+                .is_some_and(|reset_at| reset_at >= now && (reset_at - now) <= Duration::minutes(10))
     })
 }
 

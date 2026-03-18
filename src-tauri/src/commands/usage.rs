@@ -1,11 +1,11 @@
 //! Usage query Tauri commands
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use futures::stream::{self, StreamExt};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
+use tokio::sync::Mutex;
 use tokio::time::{sleep, timeout, Duration};
 
 use crate::api::usage::{get_account_usage, warmup_account as send_warmup};
@@ -57,8 +57,8 @@ pub async fn get_usage(app: AppHandle, account_id: String) -> Result<UsageInfo, 
     let usage = fetch_usage_for_account_with_active_id(account, active_account_id.as_deref()).await;
     let settings = load_app_settings().unwrap_or_default();
     emit_usage_updated(&app, &usage);
-    emit_reset_restore_notifications(&app, &store, std::slice::from_ref(&usage), &settings);
-    emit_usage_threshold_notifications(&app, &store, std::slice::from_ref(&usage), &settings);
+    emit_reset_restore_notifications(&app, &store, std::slice::from_ref(&usage), &settings).await;
+    emit_usage_threshold_notifications(&app, &store, std::slice::from_ref(&usage), &settings).await;
     record_refresh_history(&mut store, std::slice::from_ref(&usage));
     save_accounts(&store).map_err(|e| e.to_string())?;
     tray::update_usage_cache(&app, std::slice::from_ref(&usage));
@@ -69,7 +69,7 @@ pub async fn get_usage(app: AppHandle, account_id: String) -> Result<UsageInfo, 
 /// Refresh usage info for all accounts
 #[tauri::command]
 pub async fn refresh_all_accounts_usage(app: AppHandle) -> Result<Vec<UsageInfo>, String> {
-    if !watcher::begin_refresh(&app, RefreshOrigin::Manual) {
+    if !watcher::begin_refresh(&app, RefreshOrigin::Manual).await {
         return Err("Refresh already in progress".to_string());
     }
 
@@ -78,7 +78,8 @@ pub async fn refresh_all_accounts_usage(app: AppHandle) -> Result<Vec<UsageInfo>
         &app,
         RefreshOrigin::Manual,
         result.as_ref().map(|_| ()).map_err(|_| ()),
-    );
+    )
+    .await;
     result
 }
 
@@ -87,7 +88,7 @@ pub async fn refresh_selected_accounts_usage(
     app: AppHandle,
     account_ids: Vec<String>,
 ) -> Result<Vec<UsageInfo>, String> {
-    if !watcher::begin_refresh(&app, RefreshOrigin::Manual) {
+    if !watcher::begin_refresh(&app, RefreshOrigin::Manual).await {
         return Err("Refresh already in progress".to_string());
     }
 
@@ -96,7 +97,8 @@ pub async fn refresh_selected_accounts_usage(
         &app,
         RefreshOrigin::Manual,
         result.as_ref().map(|_| ()).map_err(|_| ()),
-    );
+    )
+    .await;
     result
 }
 
@@ -109,7 +111,8 @@ pub async fn refresh_all_accounts_usage_background(app: AppHandle) -> Result<Vec
             .as_ref()
             .map(|usage| automatic_refresh_result(usage))
             .unwrap_or(Err(())),
-    );
+    )
+    .await;
     result
 }
 
@@ -162,14 +165,14 @@ pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
     })
 }
 
-fn emit_reset_restore_notifications(
+async fn emit_reset_restore_notifications(
     app: &AppHandle,
     store: &AccountsStore,
     usage_list: &[UsageInfo],
     settings: &AppSettings,
 ) {
     let state_mutex = app.state::<Mutex<ClaudeResetWatchState>>();
-    let mut state = state_mutex.lock().unwrap();
+    let mut state = state_mutex.lock().await;
 
     for usage in usage_list {
         let Some(account) = store.accounts.iter().find(|account| account.id == usage.account_id) else {
@@ -210,7 +213,7 @@ fn emit_reset_restore_notifications(
         .retain(|account_id, _| store.accounts.iter().any(|account| account.id == *account_id));
 }
 
-fn emit_usage_threshold_notifications(
+async fn emit_usage_threshold_notifications(
     app: &AppHandle,
     store: &AccountsStore,
     usage_list: &[UsageInfo],
@@ -224,7 +227,7 @@ fn emit_usage_threshold_notifications(
     }
 
     let state_mutex = app.state::<Mutex<ClaudeResetWatchState>>();
-    let mut state = state_mutex.lock().unwrap();
+    let mut state = state_mutex.lock().await;
 
     for usage in usage_list {
         let Some(account) = store.accounts.iter().find(|account| account.id == usage.account_id) else {
@@ -348,11 +351,14 @@ async fn refresh_usage_stream(app: &AppHandle, accounts: Vec<StoredAccount>) -> 
         .partition(|account| account.provider == Provider::Claude);
 
     let active_for_other = active_account_ids.clone();
-    let mut concurrent = stream::iter(other_accounts.into_iter().map(|account| async move {
-        let active_account_id = active_for_other
-            .get(&account.provider)
-            .map(String::as_str);
-        fetch_usage_for_account_with_active_id(account, active_account_id.as_deref()).await
+    let mut concurrent = stream::iter(other_accounts.into_iter().map(|account| {
+        let active_for_account = active_for_other.clone();
+        async move {
+            let active_account_id = active_for_account
+                .get(&account.provider)
+                .map(String::as_str);
+            fetch_usage_for_account_with_active_id(account, active_account_id).await
+        }
     }))
         .buffer_unordered(CONCURRENT_USAGE_REFRESH_LIMIT);
     while let Some(usage) = concurrent.next().await {
@@ -366,7 +372,7 @@ async fn refresh_usage_stream(app: &AppHandle, accounts: Vec<StoredAccount>) -> 
             sleep(Duration::from_millis(CLAUDE_USAGE_PACING_MS)).await;
         }
         let active_account_id = active_account_ids.get(&account.provider).map(String::as_str);
-        let usage = fetch_usage_for_account_with_active_id(account, active_account_id.as_deref()).await;
+        let usage = fetch_usage_for_account_with_active_id(account, active_account_id).await;
         emit_usage_updated(app, &usage);
         results.push(usage);
         previous_was_claude = true;
@@ -395,8 +401,8 @@ async fn refresh_accounts_usage_internal(
     };
     let settings = load_app_settings().unwrap_or_default();
     let usage = refresh_usage_stream(&app, accounts).await;
-    emit_reset_restore_notifications(&app, &store, &usage, &settings);
-    emit_usage_threshold_notifications(&app, &store, &usage, &settings);
+    emit_reset_restore_notifications(&app, &store, &usage, &settings).await;
+    emit_usage_threshold_notifications(&app, &store, &usage, &settings).await;
     record_refresh_history(&mut store, &usage);
     save_accounts(&store).map_err(|err| err.to_string())?;
     tray::update_usage_cache(&app, &usage);

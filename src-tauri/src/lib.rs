@@ -42,10 +42,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(std::sync::Mutex::new(tray::TrayState::default()))
-        .manage(std::sync::Mutex::new(
+        .manage(tokio::sync::Mutex::new(
             commands::usage::ClaudeResetWatchState::default(),
         ))
-        .manage(std::sync::Mutex::new(watcher::RefreshControllerState::default()))
+        .manage(tokio::sync::Mutex::new(watcher::RefreshControllerState::default()))
         .setup(|app| {
             // Setup tray icon
             tray::create_tray(app.handle()).expect("Failed to create tray");

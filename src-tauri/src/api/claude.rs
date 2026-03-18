@@ -109,17 +109,19 @@ pub async fn get_claude_usage(account: &StoredAccount) -> Result<UsageInfo> {
             body.chars().take(500).collect::<String>()
         )
     })?;
+    let live_subscription_type = read_claude_credentials()
+        .await
+        .ok()
+        .and_then(|c| c.subscription_type);
 
     Ok(UsageInfo {
         account_id: account.id.clone(),
-        plan_type: map_account_type_to_plan_type(
+        plan_type: resolve_usage_plan_type(
             payload.account_type.as_deref(),
-            credentials
-                .subscription_type
-                .as_deref()
-                .or(account.plan_type.as_deref()),
-        )
-        .or_else(|| Some("claude".to_string())),
+            live_subscription_type.as_deref(),
+            credentials.subscription_type.as_deref(),
+            account.plan_type.as_deref(),
+        ),
         primary_used_percent: payload.five_hour.as_ref().and_then(|window| window.utilization),
         primary_window_minutes: payload.five_hour.as_ref().map(|_| 5 * 60),
         primary_resets_at: payload
@@ -444,6 +446,21 @@ fn map_account_type_to_plan_type(
         .or_else(|| fallback.and_then(normalize))
 }
 
+fn resolve_usage_plan_type(
+    account_type: Option<&str>,
+    live_subscription_type: Option<&str>,
+    stored_subscription_type: Option<&str>,
+    stored_plan_type: Option<&str>,
+) -> Option<String> {
+    map_account_type_to_plan_type(
+        account_type,
+        live_subscription_type
+            .or(stored_subscription_type)
+            .or(stored_plan_type),
+    )
+    .or_else(|| Some("claude".to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -452,6 +469,7 @@ mod tests {
         build_usage_headers, fallback_retry_delay_seconds, is_invalid_grant_error_message,
         is_invalid_grant_response, is_invalid_bearer_error_message,
         is_invalid_bearer_response, map_account_type_to_plan_type,
+        resolve_usage_plan_type,
         read_claude_credentials_from_path, retry_delay_seconds,
         save_runtime_claude_credentials_to_path,
         claude_credentials_from_account, ClaudeUsageResponse,
@@ -500,6 +518,20 @@ mod tests {
         );
         assert_eq!(
             map_account_type_to_plan_type(None, Some("claude_pro")).as_deref(),
+            Some("Pro")
+        );
+    }
+
+    #[test]
+    fn prefers_live_subscription_type_over_stale_stored_values() {
+        assert_eq!(
+            resolve_usage_plan_type(
+                None,
+                Some("claude_pro"),
+                Some("claude_max"),
+                Some("claude_max"),
+            )
+            .as_deref(),
             Some("Pro")
         );
     }

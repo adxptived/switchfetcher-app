@@ -144,8 +144,8 @@ export function Header({
       style={{ background: "var(--color-bg-header)", borderColor: "var(--color-border)" }}
     >
       <div className="mx-auto max-w-6xl px-6 py-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <img src={appIcon} alt="Switchfetcher" className="h-10 w-10 rounded-xl" />
               <div className="flex items-center gap-2">
@@ -160,7 +160,7 @@ export function Header({
                 </span>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {codexProcessInfo ? (
                 hasRunningProcesses ? (
                   <Badge
