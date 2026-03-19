@@ -671,6 +671,71 @@ fn detect_active_claude_account_id(store: &AccountsStore) -> Result<Option<Strin
     }))
 }
 
+fn reconcile_single_claude_account_from_provider_file(store: &mut AccountsStore) -> Result<bool> {
+    let claude_indexes = store
+        .accounts
+        .iter()
+        .enumerate()
+        .filter(|(_, account)| account.provider == Provider::Claude)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if claude_indexes.len() != 1 {
+        return Ok(false);
+    }
+
+    let Some(path) = get_provider_credential_path(Provider::Claude)? else {
+        return Ok(false);
+    };
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(_) => return Ok(false),
+    };
+    let parsed: ClaudeCredentialsFile = match serde_json::from_str(&content) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(false),
+    };
+    let oauth = parsed.claude_ai_oauth;
+    let mut changed = false;
+    let claude_index = claude_indexes[0];
+    let account_id = store.accounts[claude_index].id.clone();
+
+    {
+        let account = &mut store.accounts[claude_index];
+        if let AuthData::ClaudeOAuth {
+            access_token,
+            refresh_token,
+            expires_at,
+            subscription_type,
+        } = &mut account.auth_data
+        {
+            if *access_token != oauth.access_token
+                || *refresh_token != oauth.refresh_token
+                || *expires_at != oauth.expires_at
+                || *subscription_type != oauth.subscription_type
+                || account.plan_type != oauth.subscription_type
+            {
+                *access_token = oauth.access_token;
+                *refresh_token = oauth.refresh_token;
+                *expires_at = oauth.expires_at;
+                *subscription_type = oauth.subscription_type.clone();
+                account.plan_type = oauth.subscription_type;
+                changed = true;
+            }
+        }
+    }
+
+    if store.active_account_id_for_provider(Provider::Claude) != Some(account_id.as_str()) {
+        store.set_active_account_for_provider(Provider::Claude, account_id);
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
 fn sync_active_accounts_with_provider_files(store: &mut AccountsStore) -> Result<bool> {
     let mut changed = false;
 
@@ -681,7 +746,9 @@ fn sync_active_accounts_with_provider_files(store: &mut AccountsStore) -> Result
         }
     }
 
-    if let Some(claude_id) = detect_active_claude_account_id(store)? {
+    if reconcile_single_claude_account_from_provider_file(store)? {
+        changed = true;
+    } else if let Some(claude_id) = detect_active_claude_account_id(store)? {
         if store.active_account_id_for_provider(Provider::Claude) != Some(claude_id.as_str()) {
             store.set_active_account_for_provider(Provider::Claude, claude_id);
             changed = true;
@@ -1820,6 +1887,178 @@ mod tests {
 
         assert_eq!(report.store.accounts.len(), 1);
         assert!(report.broken_accounts.is_empty());
+
+        unsafe {
+            std::env::remove_var("SWITCHFETCHER_CONFIG_DIR");
+            std::env::remove_var("SWITCHFETCHER_HOME");
+            std::env::remove_var("SWITCHFETCHER_SECRET_BACKEND");
+        }
+        fs::remove_dir_all(temp_home).ok();
+    }
+
+    #[test]
+    #[ignore = "uses process-global home overrides and is flaky in full parallel suite"]
+    fn load_accounts_self_heals_single_claude_account_from_runtime_file() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_home = make_temp_home("claude-runtime-self-heal");
+        let config_dir = temp_home.join(".switchfetcher");
+        let claude_dir = temp_home.join(".claude");
+        unsafe {
+            std::env::set_var("SWITCHFETCHER_CONFIG_DIR", &config_dir);
+            std::env::set_var("SWITCHFETCHER_HOME", &temp_home);
+            std::env::set_var("SWITCHFETCHER_SECRET_BACKEND", "file");
+        }
+
+        let stale = StoredAccount::new_claude_oauth(
+            "Claude".to_string(),
+            "stale-access".to_string(),
+            "stale-refresh".to_string(),
+            1_763_000_000_000,
+            Some("claude_pro".to_string()),
+        );
+        let store = AccountsStore {
+            version: 1,
+            accounts: vec![stale.clone()],
+            active_account_id: None,
+            active_account_ids: std::collections::HashMap::new(),
+            history: Vec::new(),
+        };
+        save_accounts(&store).expect("seed stale claude store");
+
+        fs::create_dir_all(&claude_dir).expect("claude dir");
+        fs::write(
+            claude_dir.join(".credentials.json"),
+            r#"{
+                "claudeAiOauth": {
+                    "accessToken": "live-access",
+                    "refreshToken": "live-refresh",
+                    "expiresAt": 1763100000000,
+                    "subscriptionType": "claude_max"
+                }
+            }"#,
+        )
+        .expect("live claude credentials file");
+
+        let loaded = load_accounts().expect("load should self-heal single claude account");
+
+        assert_eq!(loaded.accounts.len(), 1);
+        assert_eq!(
+            loaded.active_account_id_for_provider(Provider::Claude),
+            Some(stale.id.as_str())
+        );
+        match &loaded.accounts[0].auth_data {
+            AuthData::ClaudeOAuth {
+                access_token,
+                refresh_token,
+                expires_at,
+                subscription_type,
+            } => {
+                assert_eq!(access_token, "live-access");
+                assert_eq!(refresh_token, "live-refresh");
+                assert_eq!(*expires_at, 1_763_100_000_000);
+                assert_eq!(subscription_type.as_deref(), Some("claude_max"));
+            }
+            other => panic!("expected ClaudeOAuth auth data, got {other:?}"),
+        }
+        assert_eq!(loaded.accounts[0].plan_type.as_deref(), Some("claude_max"));
+
+        unsafe {
+            std::env::remove_var("SWITCHFETCHER_CONFIG_DIR");
+            std::env::remove_var("SWITCHFETCHER_HOME");
+            std::env::remove_var("SWITCHFETCHER_SECRET_BACKEND");
+        }
+        fs::remove_dir_all(temp_home).ok();
+    }
+
+    #[test]
+    #[ignore = "uses process-global home overrides and is flaky in full parallel suite"]
+    fn load_accounts_does_not_auto_heal_when_multiple_claude_accounts_exist() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_home = make_temp_home("claude-runtime-ambiguous");
+        let config_dir = temp_home.join(".switchfetcher");
+        let claude_dir = temp_home.join(".claude");
+        unsafe {
+            std::env::set_var("SWITCHFETCHER_CONFIG_DIR", &config_dir);
+            std::env::set_var("SWITCHFETCHER_HOME", &temp_home);
+            std::env::set_var("SWITCHFETCHER_SECRET_BACKEND", "file");
+        }
+
+        let first = StoredAccount::new_claude_oauth(
+            "Claude A".to_string(),
+            "access-a".to_string(),
+            "refresh-a".to_string(),
+            1_763_000_000_000,
+            Some("claude_pro".to_string()),
+        );
+        let second = StoredAccount::new_claude_oauth(
+            "Claude B".to_string(),
+            "access-b".to_string(),
+            "refresh-b".to_string(),
+            1_763_000_000_001,
+            Some("claude_max".to_string()),
+        );
+        let store = AccountsStore {
+            version: 1,
+            accounts: vec![first.clone(), second.clone()],
+            active_account_id: Some(second.id.clone()),
+            active_account_ids: std::collections::HashMap::from([(Provider::Claude, second.id.clone())]),
+            history: Vec::new(),
+        };
+        save_accounts(&store).expect("seed multi-claude store");
+
+        fs::create_dir_all(&claude_dir).expect("claude dir");
+        fs::write(
+            claude_dir.join(".credentials.json"),
+            r#"{
+                "claudeAiOauth": {
+                    "accessToken": "live-access",
+                    "refreshToken": "live-refresh",
+                    "expiresAt": 1763100000000,
+                    "subscriptionType": "claude_max"
+                }
+            }"#,
+        )
+        .expect("live claude credentials file");
+
+        let loaded = load_accounts().expect("load should keep multi-claude state untouched");
+
+        assert_eq!(
+            loaded.active_account_id_for_provider(Provider::Claude),
+            Some(second.id.as_str())
+        );
+        let loaded_first = loaded
+            .accounts
+            .iter()
+            .find(|account| account.id == first.id)
+            .expect("first account");
+        let loaded_second = loaded
+            .accounts
+            .iter()
+            .find(|account| account.id == second.id)
+            .expect("second account");
+
+        match &loaded_first.auth_data {
+            AuthData::ClaudeOAuth {
+                access_token,
+                refresh_token,
+                ..
+            } => {
+                assert_eq!(access_token, "access-a");
+                assert_eq!(refresh_token, "refresh-a");
+            }
+            other => panic!("expected first ClaudeOAuth auth data, got {other:?}"),
+        }
+        match &loaded_second.auth_data {
+            AuthData::ClaudeOAuth {
+                access_token,
+                refresh_token,
+                ..
+            } => {
+                assert_eq!(access_token, "access-b");
+                assert_eq!(refresh_token, "refresh-b");
+            }
+            other => panic!("expected second ClaudeOAuth auth data, got {other:?}"),
+        }
 
         unsafe {
             std::env::remove_var("SWITCHFETCHER_CONFIG_DIR");

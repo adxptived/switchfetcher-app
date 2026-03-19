@@ -204,7 +204,7 @@ fn build_authorize_url(
 }
 
 fn build_redirect_uri(port: u16) -> String {
-    format!("http://{CALLBACK_HOST}:{port}/auth/callback")
+    format!("http://localhost:{port}/auth/callback")
 }
 
 /// Token response from the OAuth server
@@ -589,10 +589,10 @@ mod tests {
     use super::{build_redirect_uri, escape_html, format_oauth_provider_error};
 
     #[test]
-    fn redirect_uri_uses_ipv4_loopback_host() {
+    fn redirect_uri_uses_localhost_host() {
         assert_eq!(
             build_redirect_uri(1455),
-            "http://127.0.0.1:1455/auth/callback"
+            "http://localhost:1455/auth/callback"
         );
     }
 
