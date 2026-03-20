@@ -8,19 +8,12 @@ import { HistoryPanel } from "./components/panels/HistoryPanel";
 import { SettingsPanel } from "./components/panels/SettingsPanel";
 import { useAccounts } from "./hooks/useAccounts";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import {
-  checkClaudeProcesses,
-  checkCodexProcesses,
-  checkGeminiProcesses,
-} from "./ipc";
+import { useProviderProcesses } from "./hooks/useProviderProcesses";
 import type {
   AccountAction,
   AccountWithUsage,
   AppSettings,
-  ClaudeProcessInfo,
-  CodexProcessInfo,
   DiagnosticsSnapshot,
-  GeminiProcessInfo,
   Provider,
 } from "./types";
 import { computeLoadedBestAccount, formatPlanLabel, getRemainingPercent } from "./utils/accounts";
@@ -65,6 +58,7 @@ type UpdateStatus = "checking" | "up_to_date" | "update_available" | "error";
 
 export default function AppShell() {
   const { accounts, appSettings, cacheLastUpdated, cachePrefs, cacheAccountCount, notificationPermission, loading, error, usageLastUpdated, clearCache, refreshUsage, refreshSingleUsage, refreshSelectedUsage, warmupAccount, warmupAllAccounts, switchAccount, deleteAccount, deleteAccountsBulk, renameAccount, setAccountTags, listAccountHistory, getBestAccountRecommendation, getDiagnostics, importFromFile, importClaudeCredentials, importClaudeCredentialsFromPath, importGeminiCredentials, importGeminiCredentialsFromPath, addGeminiAccount, repairAccountSecret, exportAccountsSlimText, exportSelectedAccountsSlimText, importAccountsSlimText, exportAccountsFullEncryptedFile, exportSelectedAccountsFullEncryptedFile, importAccountsFullEncryptedFile, loadAppSettings, setCachePrefs, updateAppSettings, requestNotificationPermission, sendTestNotification, startOAuthLogin, completeOAuthLogin, cancelOAuthLogin } = useAccounts();
+  const { codexProcessInfo, claudeProcessInfo, geminiProcessInfo, refreshCodexProcesses } = useProviderProcesses();
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -74,9 +68,6 @@ export default function AppShell() {
   const [configCopied, setConfigCopied] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [codexProcessInfo, setCodexProcessInfo] = useState<CodexProcessInfo | null>(null);
-  const [claudeProcessInfo, setClaudeProcessInfo] = useState<ClaudeProcessInfo | null>(null);
-  const [geminiProcessInfo, setGeminiProcessInfo] = useState<GeminiProcessInfo | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [, setIsExportingSlim] = useState(false);
   const [isImportingSlim, setIsImportingSlim] = useState(false);
@@ -126,43 +117,6 @@ export default function AppShell() {
     return next;
   }), []);
 
-  const checkProcesses = useCallback(async () => {
-    try {
-      const info = await checkCodexProcesses();
-      setCodexProcessInfo(info);
-      return info;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const checkClaudeProcessState = useCallback(async () => {
-    try {
-      setClaudeProcessInfo(await checkClaudeProcesses());
-    } catch {
-      setClaudeProcessInfo(null);
-    }
-  }, []);
-
-  const checkGeminiProcessState = useCallback(async () => {
-    try {
-      setGeminiProcessInfo(await checkGeminiProcesses());
-    } catch {
-      setGeminiProcessInfo(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    void checkProcesses();
-    void checkClaudeProcessState();
-    void checkGeminiProcessState();
-    const interval = setInterval(() => {
-      void checkProcesses();
-      void checkClaudeProcessState();
-      void checkGeminiProcessState();
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [checkClaudeProcessState, checkGeminiProcessState, checkProcesses]);
   useEffect(() => {
     if (!isActionsMenuOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
@@ -227,7 +181,7 @@ export default function AppShell() {
     const account = accounts.find((entry) => entry.id === accountId);
     if (!account) return;
     if (account.provider === "codex") {
-      const info = await checkProcesses();
+      const info = await refreshCodexProcesses();
       if (info && !info.can_switch) return;
     }
     try {
@@ -238,7 +192,7 @@ export default function AppShell() {
     } finally {
       setSwitchingId(null);
     }
-  }, [accounts, checkProcesses, showToast, switchAccount]);
+  }, [accounts, refreshCodexProcesses, showToast, switchAccount]);
 
   const handleSwitchBest = useCallback(async (provider: Provider) => {
     setIsRecommendationPickerOpen(false);

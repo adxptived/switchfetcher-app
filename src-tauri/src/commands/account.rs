@@ -12,7 +12,7 @@ use crate::auth::{
     add_account, can_switch_account, create_chatgpt_account_from_refresh_token,
     get_active_account, import_from_auth_json, load_accounts, load_accounts_report,
     mark_account_switched, push_account_action, remove_account,
-    repair_account_secret as repair_secret_in_store, save_accounts,
+    repair_account_secret_targeted as repair_secret_in_store, save_accounts,
     set_active_account, set_provider_hidden as persist_provider_hidden, switch_to_account,
     update_account_tags as persist_account_tags,
 };
@@ -654,8 +654,13 @@ pub async fn get_diagnostics() -> Result<DiagnosticsSnapshot, String> {
 }
 
 #[tauri::command]
-pub async fn repair_account_secret(account_id: String) -> Result<(), String> {
-    repair_secret_in_store(&account_id).map_err(|e| e.to_string())
+pub async fn repair_account_secret(
+    app: tauri::AppHandle,
+    account_id: String,
+) -> Result<(), String> {
+    repair_secret_in_store(&account_id).map_err(|e| e.to_string())?;
+    tray::notify_accounts_changed(&app);
+    Ok(())
 }
 
 /// Export minimal account config as a compact text string.

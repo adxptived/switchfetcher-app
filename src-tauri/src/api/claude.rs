@@ -427,23 +427,31 @@ fn map_account_type_to_plan_type(
     account_type: Option<&str>,
     fallback: Option<&str>,
 ) -> Option<String> {
-    fn normalize(value: &str) -> Option<String> {
-        Some(
-            match value.trim() {
-                "" => return None,
-                "claude_max" | "max" => "Max",
-                "claude_pro" | "pro" => "Pro",
-                "free" => "Free",
-                "api_usage_billing" => "API",
-                other => return Some(other.to_owned()),
-            }
-            .to_owned(),
-        )
+    fn normalize_account_type(value: &str) -> Option<String> {
+        match value.trim() {
+            "" => None,
+            "claude_max" | "max" => Some("Max".to_string()),
+            "claude_pro" | "pro" => Some("Pro".to_string()),
+            "free" => Some("Free".to_string()),
+            "api_usage_billing" => Some("API".to_string()),
+            _ => None,
+        }
+    }
+
+    fn normalize_fallback(value: &str) -> Option<String> {
+        match value.trim() {
+            "" => None,
+            "claude_max" | "max" => Some("Max".to_string()),
+            "claude_pro" | "pro" => Some("Pro".to_string()),
+            "free" => Some("Free".to_string()),
+            "api_usage_billing" => Some("API".to_string()),
+            other => Some(other.to_owned()),
+        }
     }
 
     account_type
-        .and_then(normalize)
-        .or_else(|| fallback.and_then(normalize))
+        .and_then(normalize_account_type)
+        .or_else(|| fallback.and_then(normalize_fallback))
 }
 
 fn resolve_usage_plan_type(

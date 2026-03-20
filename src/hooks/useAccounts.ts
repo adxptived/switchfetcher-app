@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type {
   CachePrefs,
@@ -154,6 +154,42 @@ export function useAccounts() {
     return cached ? new Date(cached.timestamp) : null;
   });
   const [cacheAccountCount, setCacheAccountCount] = useState<number>(() => getCachedAccountCount());
+  const cachePrefsRef = useRef(cachePrefs);
+
+  useEffect(() => {
+    cachePrefsRef.current = cachePrefs;
+  }, [cachePrefs]);
+
+  const commitUsageUpdate = useCallback(
+    (usageList: UsageInfo[], options?: { clearUsageLoadingForMissing?: boolean }) => {
+      const usageMap = new Map(usageList.map((usage) => [usage.account_id, usage]));
+      const timestamp = new Date();
+
+      setAccounts((prev) => {
+        const next = prev.map((account) => {
+          const updatedUsage = usageMap.get(account.id);
+          if (updatedUsage) {
+            return { ...account, usage: updatedUsage, usageLoading: false };
+          }
+          if (options?.clearUsageLoadingForMissing) {
+            return { ...account, usageLoading: false };
+          }
+          return account;
+        });
+
+        if (cachePrefsRef.current.enabled) {
+          const entry = writeUsageCache(next);
+          setCacheAccountCount(entry?.accounts.length ?? 0);
+          setCacheLastUpdated(entry ? new Date(entry.timestamp) : null);
+        }
+
+        return next;
+      });
+
+      setUsageLastUpdated(timestamp);
+    },
+    []
+  );
 
   const loadAccounts = useCallback(
     async (
@@ -202,23 +238,7 @@ export function useAccounts() {
         );
       }
       const usageList = await refreshAllAccountsUsage();
-      const refreshedAt = new Date();
-      let mergedAccounts: AccountWithUsage[] = [];
-      setAccounts((prev) => {
-        mergedAccounts = prev.map((account) => {
-          const usage = usageList.find((u) => u.account_id === account.id);
-          return usage
-            ? { ...account, usage, usageLoading: false }
-            : { ...account, usageLoading: false };
-        });
-        return mergedAccounts;
-      });
-      if (cachePrefs.enabled) {
-        const entry = writeUsageCache(mergedAccounts);
-        setCacheAccountCount(entry?.accounts.length ?? 0);
-        setCacheLastUpdated(entry ? new Date(entry.timestamp) : null);
-      }
-      setUsageLastUpdated(refreshedAt);
+      commitUsageUpdate(usageList, { clearUsageLoadingForMissing: true });
     } catch (err) {
       setAccounts((prev) =>
         prev.map((account) => ({ ...account, usageLoading: false }))
@@ -226,7 +246,7 @@ export function useAccounts() {
       console.error("Failed to refresh usage:", err);
       throw err;
     }
-  }, [cachePrefs.enabled]);
+  }, [commitUsageUpdate]);
 
   const loadAppSettings = useCallback(async () => {
     const settings = await getAppSettings();
@@ -264,20 +284,7 @@ export function useAccounts() {
         )
       );
       const usage = await getUsage(accountId);
-      const refreshedAt = new Date();
-      let mergedAccounts: AccountWithUsage[] = [];
-      setAccounts((prev) => {
-        mergedAccounts = prev.map((a) =>
-          a.id === accountId ? { ...a, usage, usageLoading: false } : a
-        );
-        return mergedAccounts;
-      });
-      if (cachePrefs.enabled) {
-        const entry = writeUsageCache(mergedAccounts);
-        setCacheAccountCount(entry?.accounts.length ?? 0);
-        setCacheLastUpdated(entry ? new Date(entry.timestamp) : null);
-      }
-      setUsageLastUpdated(refreshedAt);
+      commitUsageUpdate([usage]);
     } catch (err) {
       console.error("Failed to refresh single usage:", err);
       setAccounts((prev) =>
@@ -467,7 +474,7 @@ export function useAccounts() {
     } catch (err) {
       throw err;
     }
-  }, []);
+  }, [commitUsageUpdate]);
 
   const importAccountsSlimText = useCallback(
     async (payload: string) => {
@@ -596,27 +603,13 @@ export function useAccounts() {
   const refreshSelectedUsage = useCallback(async (accountIds: string[]) => {
     try {
       const usageList = await refreshSelectedAccountsUsage(accountIds);
-      const refreshedAt = new Date();
-      let mergedAccounts: AccountWithUsage[] = [];
-      setAccounts((prev) => {
-        mergedAccounts = prev.map((account) => {
-          const usage = usageList.find((item) => item.account_id === account.id);
-          return usage ? { ...account, usage, usageLoading: false } : account;
-        });
-        return mergedAccounts;
-      });
-      if (cachePrefs.enabled) {
-        const entry = writeUsageCache(mergedAccounts);
-        setCacheAccountCount(entry?.accounts.length ?? 0);
-        setCacheLastUpdated(entry ? new Date(entry.timestamp) : null);
-      }
-      setUsageLastUpdated(refreshedAt);
+      commitUsageUpdate(usageList);
       await loadAccounts(true);
       return usageList;
     } catch (err) {
       throw err;
     }
-  }, [cachePrefs.enabled, loadAccounts]);
+  }, [commitUsageUpdate, loadAccounts]);
 
   const clearCache = useCallback(() => {
     clearStoredUsageCache();
@@ -642,10 +635,11 @@ export function useAccounts() {
 
     const bootstrapAccounts = async () => {
       try {
-        const cached = getHydratedUsageCache(cachePrefs);
+        const cached = getHydratedUsageCache(cachePrefsRef.current);
         if (cached) {
           setAccounts(cached.accounts);
           setUsageLastUpdated(new Date(cached.timestamp));
+          setCacheLastUpdated(new Date(cached.timestamp));
           setCacheAccountCount(cached.accounts.length);
           setLoading(false);
         }
@@ -674,13 +668,7 @@ export function useAccounts() {
     });
 
     void listen<UsageInfo>("usage-updated", (event) => {
-      setAccounts((prev) =>
-        prev.map((account) =>
-          account.id === event.payload.account_id
-            ? { ...account, usage: event.payload, usageLoading: false }
-            : account
-        )
-      );
+      commitUsageUpdate([event.payload]);
     }).then((dispose) => {
       if (cancelled) {
         dispose();
@@ -703,7 +691,7 @@ export function useAccounts() {
       cancelled = true;
       unlistenFns.forEach((dispose) => dispose());
     };
-  }, [cachePrefs, getNotificationPermissionState, loadAccounts, loadAppSettings, refreshUsage]);
+  }, [commitUsageUpdate, getNotificationPermissionState, loadAccounts, loadAppSettings, refreshUsage]);
 
   return {
     accounts,

@@ -399,6 +399,30 @@ fn recover_claude_from_provider_file(
     }))
 }
 
+fn recover_claude_from_provider_file_explicit(
+    _account: &PersistedStoredAccount,
+) -> Result<Option<AuthData>> {
+    let Some(path) = get_provider_credential_path(Provider::Claude)? else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read Claude credentials: {}", path.display()))?;
+    let parsed: ClaudeCredentialsFile =
+        serde_json::from_str(&content).context("Failed to parse Claude credentials file")?;
+
+    let oauth = parsed.claude_ai_oauth;
+    Ok(Some(AuthData::ClaudeOAuth {
+        access_token: oauth.access_token,
+        refresh_token: oauth.refresh_token,
+        expires_at: oauth.expires_at,
+        subscription_type: oauth.subscription_type,
+    }))
+}
+
 fn recover_gemini_from_provider_file(
     account: &PersistedStoredAccount,
     persisted_accounts: &[PersistedStoredAccount],
@@ -445,6 +469,40 @@ fn recover_gemini_from_provider_file(
     }))
 }
 
+fn recover_gemini_from_provider_file_explicit(
+    account: &PersistedStoredAccount,
+) -> Result<Option<AuthData>> {
+    let Some(path) = get_provider_credential_path(Provider::Gemini)? else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read Gemini credentials: {}", path.display()))?;
+    let parsed: GeminiCredentialsPayload =
+        serde_json::from_str(&content).context("Failed to parse Gemini credentials file")?;
+    let (email, _) = crate::api::gemini::parse_gemini_id_token_claims(&parsed.id_token);
+    let Some(candidate_email) = email else {
+        return Ok(None);
+    };
+    if !account
+        .email
+        .as_ref()
+        .is_some_and(|value| value.eq_ignore_ascii_case(&candidate_email))
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(AuthData::GeminiOAuth {
+        access_token: parsed.access_token,
+        refresh_token: parsed.refresh_token,
+        id_token: parsed.id_token,
+        expiry_date: parsed.expiry_date,
+    }))
+}
+
 fn recover_secret_for_account(
     account: &PersistedStoredAccount,
     persisted_accounts: &[PersistedStoredAccount],
@@ -473,6 +531,21 @@ fn load_secret_with_recovery(
             store_secret(&account.id, &auth_data)?;
             Ok((auth_data, true))
         }
+    }
+}
+
+fn recover_secret_for_explicit_repair(
+    account: &PersistedStoredAccount,
+    persisted_accounts: &[PersistedStoredAccount],
+) -> Result<Option<AuthData>> {
+    if let Some(auth_data) = load_secret_from_legacy_store(account)? {
+        return Ok(Some(auth_data));
+    }
+
+    match account.provider {
+        Provider::Codex => recover_secret_for_account(account, persisted_accounts),
+        Provider::Claude => recover_claude_from_provider_file_explicit(account),
+        Provider::Gemini => recover_gemini_from_provider_file_explicit(account),
     }
 }
 
@@ -959,8 +1032,59 @@ pub fn load_accounts() -> Result<AccountsStore> {
     Ok(load_accounts_report()?.store)
 }
 
-pub fn repair_account_secret(account_id: &str) -> Result<()> {
-    let report = load_accounts_report()?;
+fn apply_repaired_auth(account: &mut PersistedStoredAccount, auth_data: &AuthData) {
+    account.auth_data = Some(auth_data.clone());
+    account.secret_ref = None;
+    if let AuthData::ClaudeOAuth {
+        subscription_type, ..
+    } = auth_data
+    {
+        account.plan_type = subscription_type.clone();
+    }
+}
+
+fn repair_account_secret_targeted_inner(account_id: &str) -> Result<()> {
+    let current = read_current_persisted_store_inner()?;
+    let legacy = read_legacy_persisted_store_inner()?;
+    let Some(mut persisted) = current.or(legacy) else {
+        anyhow::bail!("No persisted store found");
+    };
+
+    let Some(index) = persisted.accounts.iter().position(|account| account.id == account_id) else {
+        anyhow::bail!("Account not found in persisted store");
+    };
+    let account = persisted.accounts[index].clone();
+
+    if load_secret(account.secret_ref.as_deref(), &account.id).is_ok() {
+        return Ok(());
+    }
+
+    let Some(auth_data) = recover_secret_for_explicit_repair(&account, &persisted.accounts)? else {
+        let report = resolve_persisted_store(persisted)?.0;
+        let broken = report
+            .broken_accounts
+            .iter()
+            .find(|entry| entry.account.id == account_id)
+            .context("Account is still missing recoverable credentials")?;
+        anyhow::bail!(
+            "{}{}",
+            broken.reason,
+            broken
+                .repair_hint
+                .as_ref()
+                .map(|hint| format!(". {hint}"))
+                .unwrap_or_default()
+        );
+    };
+
+    apply_repaired_auth(&mut persisted.accounts[index], &auth_data);
+
+    let path = get_accounts_file()?;
+    let content =
+        serde_json::to_string_pretty(&persisted).context("Failed to serialize repaired accounts store")?;
+    write_store_file(&path, &content)?;
+
+    let report = load_accounts_report_inner()?;
     if report.store.accounts.iter().any(|account| account.id == account_id) {
         return Ok(());
     }
@@ -968,7 +1092,7 @@ pub fn repair_account_secret(account_id: &str) -> Result<()> {
     let broken = report
         .broken_accounts
         .iter()
-        .find(|account| account.account.id == account_id)
+        .find(|entry| entry.account.id == account_id)
         .context("Account is still missing recoverable credentials")?;
     anyhow::bail!(
         "{}{}",
@@ -979,6 +1103,14 @@ pub fn repair_account_secret(account_id: &str) -> Result<()> {
             .map(|hint| format!(". {hint}"))
             .unwrap_or_default()
     );
+}
+
+pub fn repair_account_secret_targeted(account_id: &str) -> Result<()> {
+    with_storage_lock(|| repair_account_secret_targeted_inner(account_id))
+}
+
+pub fn repair_account_secret(account_id: &str) -> Result<()> {
+    repair_account_secret_targeted(account_id)
 }
 
 /// Save the accounts store to disk
@@ -1819,6 +1951,130 @@ mod tests {
 
         unsafe {
             std::env::remove_var("SWITCHFETCHER_CONFIG_DIR");
+            std::env::remove_var("SWITCHFETCHER_SECRET_BACKEND");
+        }
+        fs::remove_dir_all(temp_home).ok();
+    }
+
+    #[test]
+    #[ignore = "uses process-global home overrides and is flaky in full parallel suite"]
+    fn repair_account_secret_recovers_selected_broken_claude_account_from_provider_file() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_home = make_temp_home("repair-claude-targeted");
+        let config_dir = temp_home.join(".switchfetcher");
+        let claude_dir = temp_home.join(".claude");
+        unsafe {
+            std::env::set_var("SWITCHFETCHER_CONFIG_DIR", &config_dir);
+            std::env::set_var("SWITCHFETCHER_HOME", &temp_home);
+            std::env::set_var("SWITCHFETCHER_SECRET_BACKEND", "file");
+        }
+
+        let first = StoredAccount::new_claude_oauth(
+            "Claude Repair A".to_string(),
+            "stale-access-a".to_string(),
+            "stale-refresh-a".to_string(),
+            1_763_000_000_000,
+            Some("claude_pro".to_string()),
+        );
+        let second = StoredAccount::new_claude_oauth(
+            "Claude Repair B".to_string(),
+            "stale-access-b".to_string(),
+            "stale-refresh-b".to_string(),
+            1_763_000_000_001,
+            Some("claude_max".to_string()),
+        );
+
+        fs::create_dir_all(&config_dir).expect("config dir");
+        fs::create_dir_all(&claude_dir).expect("claude dir");
+        let current_json = serde_json::json!({
+            "version": 1,
+            "accounts": [{
+                "id": first.id,
+                "name": first.name,
+                "provider": "claude",
+                "tags": [],
+                "hidden": false,
+                "email": first.email,
+                "plan_type": first.plan_type,
+                "auth_mode": "claude_o_auth",
+                "auth_data": null,
+                "secret_ref": "keychain:switchfetcher:missing-claude-a",
+                "created_at": first.created_at,
+                "last_used_at": first.last_used_at
+            }, {
+                "id": second.id,
+                "name": second.name,
+                "provider": "claude",
+                "tags": [],
+                "hidden": false,
+                "email": second.email,
+                "plan_type": second.plan_type,
+                "auth_mode": "claude_o_auth",
+                "auth_data": null,
+                "secret_ref": "keychain:switchfetcher:missing-claude-b",
+                "created_at": second.created_at,
+                "last_used_at": second.last_used_at
+            }],
+            "active_account_id": second.id,
+            "active_account_ids": { "claude": second.id },
+            "history": []
+        });
+        fs::write(
+            config_dir.join("accounts.json"),
+            serde_json::to_string_pretty(&current_json).unwrap(),
+        )
+        .expect("current accounts file");
+        fs::write(
+            claude_dir.join(".credentials.json"),
+            r#"{
+                "claudeAiOauth": {
+                    "accessToken": "live-access",
+                    "refreshToken": "live-refresh",
+                    "expiresAt": 1763100000000,
+                    "subscriptionType": "claude_max"
+                }
+            }"#,
+        )
+        .expect("claude credentials file");
+
+        let report_before = load_accounts_report().expect("load should report broken accounts");
+        assert!(report_before.store.accounts.is_empty());
+        assert_eq!(report_before.broken_accounts.len(), 2);
+        assert!(report_before
+            .broken_accounts
+            .iter()
+            .any(|broken| broken.account.id == first.id));
+
+        repair_account_secret(&first.id).expect("repair should recover selected Claude account");
+
+        let report_after = load_accounts_report().expect("load should succeed after targeted repair");
+        assert_eq!(report_after.store.accounts.len(), 1);
+        assert_eq!(report_after.broken_accounts.len(), 1);
+        assert_eq!(report_after.store.accounts[0].id, first.id);
+        assert_eq!(report_after.store.accounts[0].plan_type.as_deref(), Some("claude_max"));
+        assert!(report_after
+            .broken_accounts
+            .iter()
+            .all(|broken| broken.account.id != first.id));
+
+        match &report_after.store.accounts[0].auth_data {
+            AuthData::ClaudeOAuth {
+                access_token,
+                refresh_token,
+                expires_at,
+                subscription_type,
+            } => {
+                assert_eq!(access_token, "live-access");
+                assert_eq!(refresh_token, "live-refresh");
+                assert_eq!(*expires_at, 1_763_100_000_000);
+                assert_eq!(subscription_type.as_deref(), Some("claude_max"));
+            }
+            other => panic!("expected ClaudeOAuth auth data, got {other:?}"),
+        }
+
+        unsafe {
+            std::env::remove_var("SWITCHFETCHER_CONFIG_DIR");
+            std::env::remove_var("SWITCHFETCHER_HOME");
             std::env::remove_var("SWITCHFETCHER_SECRET_BACKEND");
         }
         fs::remove_dir_all(temp_home).ok();
