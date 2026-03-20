@@ -1,9 +1,11 @@
+import { useEffect, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import type {
   ClaudeProcessInfo,
   CodexProcessInfo,
   GeminiProcessInfo,
 } from "../types";
+import { formatRelativeTime } from "../utils/date";
 import { Badge } from "./Badge";
 import appIcon from "../assets/icon.png";
 
@@ -18,6 +20,8 @@ interface HeaderProps {
   actionsMenuRef: RefObject<HTMLDivElement | null>;
   isRefreshing: boolean;
   isWarmingAllCodex: boolean;
+  usageLastUpdated: Date | null;
+  isUsageLoading: boolean;
   onThemeToggle: () => void;
   onOpenSettings: () => void;
   onOpenHistory: () => void;
@@ -113,6 +117,55 @@ function IconButton({
   );
 }
 
+function HeaderStatus({
+  usageLastUpdated,
+  isUsageLoading,
+}: {
+  usageLastUpdated: Date | null;
+  isUsageLoading: boolean;
+}) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setTick((value) => value + 1);
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const label = isUsageLoading
+    ? "Updating cache..."
+    : usageLastUpdated
+      ? `Updated ${formatRelativeTime(usageLastUpdated)}`
+      : "Cache not loaded";
+
+  return (
+    <div
+      className="inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm"
+      style={{
+        borderColor: "var(--color-border)",
+        background: "color-mix(in srgb, var(--color-bg-muted) 76%, transparent)",
+        color: "var(--color-text-secondary)",
+      }}
+      title={usageLastUpdated ? `Usage cache timestamp: ${usageLastUpdated.toLocaleString()}` : "No cached usage timestamp yet"}
+    >
+      <span
+        className={`flex h-2.5 w-2.5 rounded-full ${isUsageLoading ? "animate-pulse" : ""}`}
+        style={{
+          background: isUsageLoading
+            ? "#d97706"
+            : usageLastUpdated
+              ? "var(--color-codex)"
+              : "var(--color-text-muted)",
+        }}
+      />
+      <ClockIcon />
+      <span className="whitespace-nowrap">{label}</span>
+    </div>
+  );
+}
+
 export function Header({
   theme,
   appVersion,
@@ -124,6 +177,8 @@ export function Header({
   actionsMenuRef,
   isRefreshing,
   isWarmingAllCodex,
+  usageLastUpdated,
+  isUsageLoading,
   onThemeToggle,
   onOpenSettings,
   onOpenHistory,
@@ -203,6 +258,7 @@ export function Header({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <HeaderStatus usageLastUpdated={usageLastUpdated} isUsageLoading={isUsageLoading} />
             <button
               onClick={onOpenRecommendationPicker}
               className="h-10 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
@@ -265,6 +321,7 @@ export function Header({
             <button
               onClick={onRefresh}
               disabled={isRefreshing}
+              title="Refresh usage data"
               className="h-10 rounded-lg px-4 py-2 text-sm font-medium sf-btn-secondary disabled:opacity-50"
             >
               {isRefreshing ? "Refreshing..." : "Refresh All"}

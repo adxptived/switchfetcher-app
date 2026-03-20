@@ -177,6 +177,11 @@ export interface AppSettings {
   usage_alert_threshold: 50 | 55 | 60 | 65 | 70 | 75 | 80 | 85 | 90 | 95 | null;
 }
 
+export interface CachePrefs {
+  enabled: boolean;
+  ttlMinutes: number;
+}
+
 export type NotificationPermissionState =
   | "granted"
   | "denied"

@@ -1,11 +1,15 @@
 import { Toggle } from "../Toggle";
-import type { AppSettings, NotificationPermissionState } from "../../types";
+import { useEffect, useState } from "react";
+import { formatRelativeTime } from "../../utils/date";
+import type { AppSettings, CachePrefs, NotificationPermissionState } from "../../types";
 
 type UpdateStatus = "checking" | "up_to_date" | "update_available" | "error";
 
 interface SettingsPanelProps {
   isOpen: boolean;
   settingsDraft: AppSettings | null;
+  cacheInfo: { lastUpdated: Date | null; accountCount: number };
+  cachePrefs: CachePrefs;
   notificationPermission: NotificationPermissionState;
   settingsSaving: boolean;
   sendingTestNotification: boolean;
@@ -17,6 +21,8 @@ interface SettingsPanelProps {
   onClose: () => void;
   onFieldChange: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
   onSave: () => void;
+  onClearCache: () => void;
+  onCachePrefsChange: (prefs: CachePrefs) => void;
   onRequestNotificationPermission: () => void;
   onSendTestNotification: () => void;
   onOpenGitHub: () => void;
@@ -26,6 +32,8 @@ interface SettingsPanelProps {
 export function SettingsPanel({
   isOpen,
   settingsDraft,
+  cacheInfo,
+  cachePrefs,
   notificationPermission,
   settingsSaving,
   sendingTestNotification,
@@ -37,14 +45,35 @@ export function SettingsPanel({
   onClose,
   onFieldChange,
   onSave,
+  onClearCache,
+  onCachePrefsChange,
   onRequestNotificationPermission,
   onSendTestNotification,
   onOpenGitHub,
   onCheckForUpdates,
 }: SettingsPanelProps) {
-  if (!isOpen) return null;
+  const sectionTitleClass = "flex items-center gap-2.5 text-sm font-semibold";
+  const [, setTick] = useState(0);
 
-  const sectionTitleClass = "flex items-center gap-2 text-sm font-semibold";
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setTick((value) => value + 1);
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const permissionTone =
+    notificationPermission === "granted"
+      ? "#16a34a"
+      : notificationPermission === "denied"
+        ? "#dc2626"
+        : "#d97706";
+  const cacheSummary = cacheInfo.lastUpdated
+    ? `Last updated: ${formatRelativeTime(cacheInfo.lastUpdated)} · ${cacheInfo.accountCount} account${cacheInfo.accountCount === 1 ? "" : "s"}`
+    : "No cache";
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center sf-overlay">
@@ -85,6 +114,39 @@ export function SettingsPanel({
               <div>
                 <div className={sectionTitleClass} style={{ color: "var(--color-text-primary)" }}>
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4.5 7.5A2.5 2.5 0 017 5h10a2.5 2.5 0 012.5 2.5v9A2.5 2.5 0 0117 19H7a2.5 2.5 0 01-2.5-2.5v-9z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8.5 9.5h7M8.5 13h5" />
+                  </svg>
+                  Cache
+                </div>
+                <div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>Usage data is cached in localStorage for instant startup.</div>
+              </div>
+              <div className="rounded-lg border p-3 text-sm" style={{ background: "var(--color-bg-muted)", borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}>
+                {cacheSummary}
+              </div>
+              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
+                <span>Enable cache on startup</span>
+                <Toggle checked={cachePrefs.enabled} onChange={(checked) => onCachePrefsChange({ ...cachePrefs, enabled: checked })} />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
+                <span>Cache TTL (minutes)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={cachePrefs.ttlMinutes}
+                  onChange={(event) => onCachePrefsChange({ ...cachePrefs, ttlMinutes: Number(event.target.value) })}
+                  className="h-10 w-32 rounded-lg px-3 text-sm sf-input"
+                />
+              </label>
+              <div className="text-xs" style={{ color: "var(--color-text-muted)" }}>Set to 0 to never expire cached usage data.</div>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={onClearCache} className="rounded-lg px-3 py-2 text-sm sf-btn-secondary">Clear Cache</button>
+              </div>
+            </div>
+            <div className="rounded-xl p-4 space-y-4 sf-panel">
+              <div>
+                <div className={sectionTitleClass} style={{ color: "var(--color-text-primary)" }}>
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                   </svg>
                   Notifications
@@ -114,7 +176,12 @@ export function SettingsPanel({
                   Enable usage threshold alerts
                 </label>
               </div>
-              <div className="rounded-lg border p-3 text-sm" style={{ background: "var(--color-bg-muted)", borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}>Permission state: <span className="font-medium">{notificationPermission}</span></div>
+              <div className="rounded-lg border p-3 text-sm" style={{ background: "var(--color-bg-muted)", borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}>
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: permissionTone }} />
+                  Permission state: <span className="font-medium">{notificationPermission}</span>
+                </span>
+              </div>
               <div className="flex flex-wrap gap-2"><button onClick={onRequestNotificationPermission} className="rounded-lg px-3 py-2 text-sm sf-btn-secondary">Request Permission</button><button onClick={onSendTestNotification} disabled={sendingTestNotification} className="rounded-lg px-3 py-2 text-sm sf-btn-primary disabled:opacity-50">{sendingTestNotification ? "Sending..." : "Send Test Notification"}</button></div>
             </div>
             <div className="rounded-xl p-4 space-y-4 sf-panel">

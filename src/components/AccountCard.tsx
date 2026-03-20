@@ -127,11 +127,11 @@ export function AccountCard({
 
   return (
     <div
-      className="relative rounded-2xl border p-4 transition-all duration-[var(--transition-base)]"
+      className="relative rounded-2xl border p-5 transition-all duration-[var(--transition-base)]"
       style={{
         background: "var(--color-bg-card)",
         borderColor: account.is_active ? accentColor : "var(--color-border)",
-        borderLeft: `4px solid ${accentColor}`,
+        borderLeft: `${account.is_active ? 5 : 4}px solid ${accentColor}`,
         boxShadow: account.is_active
           ? `0 0 0 1px ${accentColor}`
           : "0 10px 30px rgba(15, 23, 42, 0.04)",
@@ -333,7 +333,7 @@ export function AccountCard({
         ) : null}
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         {account.is_active ? (
           <button
             disabled

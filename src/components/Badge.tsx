@@ -49,10 +49,15 @@ export function Badge({ variant, label, provider, status, title }: BadgeProps) {
         color: "var(--color-text-secondary)",
       };
 
+  const className =
+    variant === "provider"
+      ? "inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium"
+      : "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium";
+
   return (
     <span
       title={title}
-      className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium"
+      className={className}
       style={style}
     >
       {label}
